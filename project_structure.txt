@@ -1,0 +1,61 @@
+.
+├── benchmark_test_result.json
+├── builds.csv
+├── docs
+│   └── README.md
+├── ios
+│   └── MLBuildRunner
+│       ├── MLBuildRunner
+│       │   ├── Assets.xcassets
+│       │   ├── ContentView.swift
+│       │   ├── Item.swift
+│       │   └── MLBuildRunnerApp.swift
+│       ├── MLBuildRunner.xcodeproj
+│       │   ├── project.pbxproj
+│       │   ├── project.xcworkspace
+│       │   ├── xcshareddata
+│       │   └── xcuserdata
+│       └── MLBuildRunnerTests
+│           ├── MLBuildRunnerTests.swift
+│           └── Resources
+├── mobilenet_v2.onnx
+├── project_structure.txt
+├── pyproject.toml
+├── src
+│   └── mlbuild
+│       ├── __init__.py
+│       ├── backends
+│       │   ├── __init__.py
+│       │   └── coreml
+│       ├── benchmark
+│       │   ├── device_runner.py
+│       │   └── runner.py
+│       ├── cli
+│       │   ├── __init__.py
+│       │   ├── commands
+│       │   └── main.py
+│       ├── core
+│       │   ├── __init__.py
+│       │   ├── diff_utils.py
+│       │   ├── environment.py
+│       │   ├── errors.py
+│       │   ├── hash.py
+│       │   ├── ir.py
+│       │   ├── types.py
+│       │   └── validation.py
+│       ├── loaders
+│       │   ├── __init__.py
+│       │   ├── loader.py
+│       │   └── onnx_loader.py
+│       └── registry
+│           ├── __init__.py
+│           ├── local.py
+│           └── schema.py
+└── tests
+    ├── conftest.py
+    ├── fixtures
+    ├── test_artifact_hash.py
+    ├── test_benchmark.py
+    └── test_normalization.py
+
+24 directories, 35 files

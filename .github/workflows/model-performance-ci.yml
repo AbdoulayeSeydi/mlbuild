@@ -1,0 +1,277 @@
+name: Model Performance CI
+
+on:
+  pull_request:
+    paths:
+      - 'models/**'
+      - 'training/**'
+      - '.github/workflows/model-performance-ci.yml'
+
+env:
+  PYTHONHASHSEED: 0  # Deterministic builds
+
+jobs:
+  performance-validation:
+    runs-on: macos-14  # M3 for consistent benchmarking
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for baseline comparison
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install MLBuild
+        run: |
+          pip install mlbuild
+          mlbuild init
+          mlbuild doctor
+      
+      - name: Configure Remote Storage (Optional)
+        if: env.MLBUILD_REMOTE_ENABLED == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          mlbuild remote add prod \
+            --backend s3 \
+            --bucket ${{ vars.MLBUILD_BUCKET }} \
+            --region us-east-1 \
+            --default
+      
+      - name: Build Model
+        id: build
+        run: |
+          # Build the model
+          mlbuild build \
+            --model models/my_model.onnx \
+            --target apple_m1 \
+            --quantize fp16 \
+            --name "pr-${{ github.event.pull_request.number }}"
+          
+          # Extract build ID from log output
+          BUILD_ID=$(mlbuild log --limit 1 --json | jq -r '.[0].build_id')
+          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
+          echo "Built model: $BUILD_ID"
+      
+      - name: Benchmark Model
+        run: |
+          mlbuild benchmark ${{ steps.build.outputs.build_id }} \
+            --runs 100 \
+            --warmup 20 \
+            --json > benchmark-results.json
+          
+          cat benchmark-results.json
+      
+      - name: Get Production Baseline
+        id: baseline
+        run: |
+          # Option 1: Pull from remote
+          if [ "${{ env.MLBUILD_REMOTE_ENABLED }}" == "true" ]; then
+            mlbuild pull production --force
+            BASELINE_ID="production"
+          else
+            # Option 2: Use tagged baseline from main branch
+            git checkout main -- .mlbuild/ || true
+            mlbuild init --force
+            BASELINE_ID=$(mlbuild log --tag production --limit 1 --json | jq -r '.[0].build_id // "none"')
+            
+            if [ "$BASELINE_ID" == "none" ]; then
+              echo "No production baseline found - skipping comparison"
+              echo "baseline_exists=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          echo "baseline_id=$BASELINE_ID" >> $GITHUB_OUTPUT
+          echo "baseline_exists=true" >> $GITHUB_OUTPUT
+      
+      - name: Performance Regression Check
+        if: steps.baseline.outputs.baseline_exists == 'true'
+        id: regression
+        continue-on-error: true
+        run: |
+          # Compare against baseline - fails if >5% slower
+          mlbuild compare \
+            ${{ steps.baseline.outputs.baseline_id }} \
+            ${{ steps.build.outputs.build_id }} \
+            --threshold 5 \
+            --metric p95 \
+            --json > comparison.json \
+            --ci
+          
+          REGRESSION_DETECTED=$?
+          echo "regression_detected=$REGRESSION_DETECTED" >> $GITHUB_OUTPUT
+      
+      - name: Validate SLA Requirements
+        id: sla
+        continue-on-error: true
+        run: |
+          # Enforce production SLAs
+          mlbuild validate ${{ steps.build.outputs.build_id }} \
+            --max-latency 10 \
+            --max-p95 15 \
+            --max-memory 100 \
+            --ci
+          
+          SLA_PASSED=$?
+          echo "sla_passed=$SLA_PASSED" >> $GITHUB_OUTPUT
+      
+      - name: Generate Performance Report
+        if: always()
+        run: |
+          cat > performance-report.md << 'EOF'
+          ## 🚀 Model Performance Report
+          
+          **Build ID:** `${{ steps.build.outputs.build_id }}`
+          **PR:** #${{ github.event.pull_request.number }}
+          
+          ### Build Info
+          - **Model:** models/my_model.onnx
+          - **Target:** Apple M1
+          - **Quantization:** FP16
+          
+          EOF
+          
+          # Add benchmark results
+          if [ -f benchmark-results.json ]; then
+            echo "### Performance Metrics" >> performance-report.md
+            echo "" >> performance-report.md
+            echo "| Metric | Value |" >> performance-report.md
+            echo "|--------|-------|" >> performance-report.md
+            echo "| p50 Latency | $(jq -r '.p50_ms' benchmark-results.json)ms |" >> performance-report.md
+            echo "| p95 Latency | $(jq -r '.p95_ms' benchmark-results.json)ms |" >> performance-report.md
+            echo "| p99 Latency | $(jq -r '.p99_ms' benchmark-results.json)ms |" >> performance-report.md
+            echo "| Peak Memory | $(jq -r '.memory_peak_mb' benchmark-results.json)MB |" >> performance-report.md
+            echo "" >> performance-report.md
+          fi
+          
+          # Add comparison if available
+          if [ -f comparison.json ]; then
+            echo "### 📊 Comparison vs Production Baseline" >> performance-report.md
+            echo "" >> performance-report.md
+            echo "| Metric | Baseline | Candidate | Change |" >> performance-report.md
+            echo "|--------|----------|-----------|--------|" >> performance-report.md
+            
+            BASELINE_P50=$(jq -r '.baseline.p50_ms' comparison.json)
+            CANDIDATE_P50=$(jq -r '.candidate.p50_ms' comparison.json)
+            CHANGE_P50=$(jq -r '.change.p50' comparison.json)
+            echo "| p50 Latency | ${BASELINE_P50}ms | ${CANDIDATE_P50}ms | ${CHANGE_P50}% |" >> performance-report.md
+            
+            BASELINE_P95=$(jq -r '.baseline.p95_ms' comparison.json)
+            CANDIDATE_P95=$(jq -r '.candidate.p95_ms' comparison.json)
+            CHANGE_P95=$(jq -r '.change.p95' comparison.json)
+            echo "| p95 Latency | ${BASELINE_P95}ms | ${CANDIDATE_P95}ms | ${CHANGE_P95}% |" >> performance-report.md
+            
+            BASELINE_P99=$(jq -r '.baseline.p99_ms' comparison.json)
+            CANDIDATE_P99=$(jq -r '.candidate.p99_ms' comparison.json)
+            CHANGE_P99=$(jq -r '.change.p99' comparison.json)
+            echo "| p99 Latency | ${BASELINE_P99}ms | ${CANDIDATE_P99}ms | ${CHANGE_P99}% |" >> performance-report.md
+            
+            echo "" >> performance-report.md
+            
+            # Add verdict
+            if [ "${{ steps.regression.outputs.regression_detected }}" == "1" ]; then
+              echo "### ❌ Performance Regression Detected" >> performance-report.md
+              echo "" >> performance-report.md
+              echo "The candidate model is more than 5% slower than the baseline." >> performance-report.md
+            else
+              echo "### ✅ No Performance Regression" >> performance-report.md
+              echo "" >> performance-report.md
+              echo "Performance is within acceptable thresholds." >> performance-report.md
+            fi
+          fi
+          
+          # Add SLA validation
+          if [ "${{ steps.sla.outputs.sla_passed }}" == "1" ]; then
+            echo "" >> performance-report.md
+            echo "### ⚠️ SLA Violation" >> performance-report.md
+            echo "" >> performance-report.md
+            echo "Model does not meet production SLA requirements." >> performance-report.md
+          fi
+          
+          cat performance-report.md
+      
+      - name: Comment PR with Performance Report
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('performance-report.md', 'utf8');
+            
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Model Performance Report')
+            );
+            
+            // Update or create comment
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: report
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: report
+              });
+            }
+      
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: |
+            benchmark-results.json
+            comparison.json
+            performance-report.md
+          retention-days: 30
+      
+      - name: Fail Build on Regression or SLA Violation
+        if: |
+          steps.regression.outputs.regression_detected == '1' ||
+          steps.sla.outputs.sla_passed == '1'
+        run: |
+          echo "❌ Build failed due to performance issues"
+          if [ "${{ steps.regression.outputs.regression_detected }}" == "1" ]; then
+            echo "  - Performance regression detected (>5% slower)"
+          fi
+          if [ "${{ steps.sla.outputs.sla_passed }}" == "1" ]; then
+            echo "  - SLA requirements not met"
+          fi
+          exit 1
+      
+      - name: Tag as Production (on merge to main)
+        if: |
+          github.event.pull_request.merged == true &&
+          github.event.pull_request.base.ref == 'main' &&
+          steps.regression.outputs.regression_detected != '1' &&
+          steps.sla.outputs.sla_passed != '1'
+        run: |
+          # Tag successful build as production baseline
+          mlbuild tag create ${{ steps.build.outputs.build_id }} production --force
+          
+          # Push to remote if configured
+          if [ "${{ env.MLBUILD_REMOTE_ENABLED }}" == "true" ]; then
+            mlbuild push production --force
+          fi
+          
+          echo "✅ Tagged build as production baseline"

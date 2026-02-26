@@ -1,0 +1,5 @@
+artifacts/
+temp/
+*.db-journal
+*.db-wal
+*.db-shm

@@ -1,0 +1,37 @@
+name: MLBuild Quick Start
+
+on:
+  pull_request:
+    paths:
+      - 'models/**'
+
+jobs:
+  validate-performance:
+    runs-on: macos-14
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install MLBuild
+        run: pip install mlbuild && mlbuild init
+      
+      - name: Build & Validate
+        run: |
+          # Build model
+          mlbuild build --model models/model.onnx --target apple_m1 --quantize fp16
+          
+          # Get build ID
+          BUILD_ID=$(mlbuild log --limit 1 --json | jq -r '.[0].build_id')
+          
+          # Validate performance SLAs
+          mlbuild validate $BUILD_ID \
+            --max-latency 10 \
+            --max-p95 15 \
+            --ci
+          
+          # Compare against baseline (if exists)
+          mlbuild compare production $BUILD_ID --threshold 5 --ci || true

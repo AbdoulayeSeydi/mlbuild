@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MLBuild"
+version = "0.1.6"
+description = "DevTool for enforcement of inference performance SLAs in CI, automatically blocking slow ML models before they reach production"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Abdoulaye Seydi", email = "abdoulayeaseydi@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "coremltools>=7.0",
+    "onnx>=1.12.0,<1.19.0",
+    "onnx2torch>=1.5.0",
+    "torch>=2.0.0",
+    "numpy>=1.24.0,<2.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.12.0",
+]
+
+[project.scripts]
+mlbuild = "mlbuild.cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/abdoulayeaseydi/mlbuild"
+Repository = "https://github.com/abdoulayeaseydi/mlbuild.git"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100

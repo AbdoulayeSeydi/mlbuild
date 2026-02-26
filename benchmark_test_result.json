@@ -1,0 +1,25 @@
+{
+  "build_id": "test-run",
+  "chip": "apple_m1",
+  "compute_unit": "CPU_ONLY",
+  "num_runs": 19,
+  "failures": 0,
+  "latency_p50": 6.504874909296632,
+  "latency_p95": 6.619229190982878,
+  "latency_p99": 6.663178694434464,
+  "latency_mean": 6.507883810340182,
+  "latency_std": 0.06983740931742471,
+  "p50_ci_low": 6.455750088207424,
+  "p50_ci_high": 6.5130830043926835,
+  "autocorr_lag1": 0.08111987237695224,
+  "memory_peak_mb": 346.921875,
+  "thermal_drift_ratio": 0.9924392853972885,
+  "hardware": {
+    "chip": "apple_m1",
+    "machine": "arm64",
+    "macos_version": "15.6",
+    "cpu_count_logical": 8,
+    "cpu_count_physical": 8,
+    "memory_gb": 8.0
+  }
+}

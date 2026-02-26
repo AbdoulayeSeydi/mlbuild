@@ -1,0 +1,12 @@
+version: 1
+remotes:
+  test-local:
+    backend: local
+    prefix: mlbuild/
+    default: false
+    path: /private/tmp/mlbuild-remote
+  prod-storage:
+    backend: local
+    prefix: mlbuild/
+    default: false
+    path: /private/tmp/mlbuild-prod
