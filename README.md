@@ -476,7 +476,6 @@ Inspired by:
 
 ## Contact
 
-- Issues: [GitHub Issues](https://github.com/AbdoulayeSeydi/mlbuild/issues)
 - Email: abdoulayeaseydi@gmail.com
 
 ---
