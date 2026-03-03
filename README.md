@@ -576,12 +576,12 @@ MIT License — see [LICENSE](LICENSE) for details.
 - Android ADB bridge — benchmark on connected Android devices without Android Studio
 - Xcode Instruments integration — real iPhone hardware profiling
 
-### Phase 2 — More Backends
+### Phase 2 — Cloud Benchmarking
+- Remote benchmark execution on cloud hardware
+
+### Phase 3 — More Backends
 - TensorRT — NVIDIA GPU inference
 - Qualcomm QNN — Snapdragon NPU
-
-### Phase 3 — Cloud Benchmarking
-- Remote benchmark execution on cloud hardware
 
 ---
 
