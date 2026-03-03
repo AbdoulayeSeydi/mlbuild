@@ -10,3 +10,9 @@ remotes:
     prefix: mlbuild/
     default: false
     path: /private/tmp/mlbuild-prod
+  prod:
+    backend: s3
+    prefix: mlbuild/artifacts/
+    default: true
+    bucket: my-models-bucket
+    region: us-east-1

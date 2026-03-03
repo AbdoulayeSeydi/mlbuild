@@ -12,12 +12,15 @@ from .commands.remote import remote
 from .commands.push import push
 from .commands.pull import pull
 from .commands.sync import sync
+from .commands.compare import ci_check
+from .commands.report import report
+
 
 console = Console()
 
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="mlbuild")
+@click.version_option(version="0.2.0", prog_name="mlbuild")
 def cli():
     """
     MLBuild - Deterministic build system for CoreML models.
@@ -37,13 +40,21 @@ def cli():
 @click.option(
     "--backend",
     default="coreml",
-    type=click.Choice(["coreml", "onnxruntime"]),
+    type=click.Choice(["coreml", "tflite"]), 
     help="Backend to use for conversion"
 )
 @click.option(
     "--target",
     required=True,
-    type=click.Choice(["apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1"]),
+    type=click.Choice([
+        # Apple
+        "apple_a17", "apple_a16", "apple_a15", 
+        "apple_m3", "apple_m2", "apple_m1",
+        # Android
+        "android_arm64", "android_arm32", "android_x86",
+        # Edge
+        "raspberry_pi", "coral_tpu", "generic_linux",
+    ]),  
 )
 @click.option("--name")
 @click.option(
@@ -109,6 +120,8 @@ cli.add_command(remote)
 cli.add_command(push)
 cli.add_command(pull)
 cli.add_command(sync)
+cli.add_command(ci_check, name="ci-check")
+cli.add_command(report)
 
 
 @cli.command()
@@ -141,7 +154,7 @@ def diff(build_a, build_b, as_json, ignore_size, ignore_quant, deep):
               default='ALL')
 @click.option('--json', 'as_json', is_flag=True)
 def benchmark(build_id, runs, warmup, compute_unit, as_json):
-    """Benchmark a build on current device."""
+    """Benchmark a build on current device. Supports CoreML and TFLite formats."""
     from .commands.benchmark import benchmark as benchmark_cmd
     ctx = click.get_current_context()
     ctx.invoke(
@@ -176,23 +189,37 @@ def doctor(as_json, soft):
 @click.argument('build_ids', nargs=-1, required=True)
 @click.option('--runs', default=50, type=int)
 @click.option('--warmup', default=10, type=int)
-def compare_quantization(build_ids, runs, warmup):
+@click.option('--compute-unit', default='all', type=click.Choice(['all', 'cpu', 'ane', 'gpu']))
+@click.option('--baseline', default=None)
+@click.option('--json-output', is_flag=True)
+def compare_quantization(build_ids, runs, warmup, compute_unit, baseline, json_output):
     """Compare different quantization levels (FP32/FP16/INT8)."""
     from .commands.compare_quantization import compare_quantization as cmd
     ctx = click.get_current_context()
-    ctx.invoke(cmd, build_ids=build_ids, runs=runs, warmup=warmup)
+    ctx.invoke(cmd, build_ids=build_ids, runs=runs, warmup=warmup,
+               compute_unit=compute_unit, baseline=baseline, json_output=json_output)
 
 @cli.command()
 @click.argument('build_id')
-@click.option('--runs', default=50, type=int)
-@click.option('--warmup', default=10, type=int)
-@click.option('--top', default=15, type=int)
-@click.option('--analyze-warmup', is_flag=True)
-def profile(build_id, runs, warmup, top, analyze_warmup):
-    """Profile model layer-by-layer."""
-    from .commands.profile import profile as profile_cmd
+@click.option('--runs',            default=50,  type=int)
+@click.option('--warmup',          default=10,  type=int)
+@click.option('--top',             default=15,  type=int)
+@click.option('--deep',            is_flag=True)
+@click.option('--int8-build',      default=None)
+@click.option('--analyze-warmup',  is_flag=True)
+@click.option('--cold-start',      is_flag=True)
+@click.option('--memory',          is_flag=True)
+@click.option('--cold-start-runs', default=60,  type=int)
+@click.option('--quant-samples',   default=50,  type=int)
+def profile(build_id, runs, warmup, top, deep, int8_build, analyze_warmup, cold_start, memory, cold_start_runs, quant_samples):
+    """Profile model performance. Use --deep for full per-layer analysis (TFLite)."""
+    from .commands.profile import profile as cmd
     ctx = click.get_current_context()
-    ctx.invoke(profile_cmd, build_id=build_id, runs=runs, warmup=warmup, top=top, analyze_warmup=analyze_warmup)
+    ctx.invoke(cmd, build_id=build_id, runs=runs, warmup=warmup, top=top,
+               deep=deep, int8_build=int8_build,
+               analyze_warmup=analyze_warmup, cold_start=cold_start,
+               memory=memory, cold_start_runs=cold_start_runs,
+               quant_samples=quant_samples)
 
 @cli.command()
 @click.argument('build_id')
@@ -225,6 +252,7 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
 @click.argument('baseline_id')
 @click.argument('candidate_id')
 @click.option('--threshold', default=5.0, type=float)
+@click.option('--size-threshold', default=5.0, type=float, help='Size regression threshold % (default: 5%)')
 @click.option('--metric', 
               type=click.Choice(['p50', 'p95', 'p99', 'mean']),
               default='p50')
@@ -235,8 +263,8 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
 @click.option('--warmup', default=20, type=int)
 @click.option('--json', 'as_json', is_flag=True)
 @click.option('--ci', is_flag=True)
-def compare(baseline_id, candidate_id, threshold, metric, compute_unit, runs, warmup, as_json, ci):
-    """Detect performance regressions between two builds."""
+def compare(baseline_id, candidate_id, threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, ci):
+    """Compare two builds and detect regressions in latency and model size. Supports CoreML and TFLite."""
     from .commands.compare import compare as compare_cmd
     ctx = click.get_current_context()
     ctx.invoke(
@@ -244,6 +272,7 @@ def compare(baseline_id, candidate_id, threshold, metric, compute_unit, runs, wa
         baseline_id=baseline_id,
         candidate_id=candidate_id,
         threshold=threshold,
+        size_threshold=size_threshold,
         metric=metric,
         compute_unit=compute_unit,
         runs=runs,

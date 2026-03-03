@@ -308,8 +308,16 @@ class RemoteRepository:
         if config.backend == Backend.LOCAL:
             from .local import LocalStorageBackend
             return LocalStorageBackend(config.path)
+        
         elif config.backend == Backend.S3:
-            raise NotImplementedError("S3 backend not yet implemented")
+            from .s3 import S3StorageBackend
+            return S3StorageBackend(
+                bucket=config.bucket,
+                region=config.region,
+                prefix=config.prefix,
+                endpoint_url=config.endpoint_url,
+            )
+        
         else:
             raise ValueError(f"Unknown backend: {config.backend}")
 

@@ -1,19 +1,21 @@
 """
-MLBuild backends.
+MLBuild Backends
 
-This file ensures all backends are auto-registered on import.
+Available backends:
+- CoreML: Apple devices (iOS, macOS)
+- TFLite: Android, edge devices
 """
 
-from .registry import BackendRegistry
 from .base import Backend, BackendCapabilities, EnvironmentValidation
-
-# Force import of all backends to trigger auto-registration
-from . import coreml
-from . import onnxruntime
+from .registry import BackendRegistry
+from .coreml.backend import CoreMLBackend
+from .tflite.backend import TFLiteBackend
 
 __all__ = [
-    'BackendRegistry',
-    'Backend',
-    'BackendCapabilities',
-    'EnvironmentValidation',
+    "Backend",
+    "BackendCapabilities",
+    "EnvironmentValidation",
+    "BackendRegistry",
+    "CoreMLBackend",
+    "TFLiteBackend",
 ]

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "MLBuild"
-version = "0.1.6"
-description = "DevTool for enforcement of inference performance SLAs in CI, automatically blocking slow ML models before they reach production"
+version = "0.2.0"
+description = "DevTool for enforcement of inference performance SLAs in CI — automatically blocking slow or bloated ML models before they reach production"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -22,17 +22,48 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "coremltools>=7.0",
-    "onnx>=1.12.0,<1.19.0",
-    "onnx2torch>=1.5.0",
-    "torch>=2.0.0",
-    "numpy>=1.24.0,<2.0",
+    # CLI + display
     "click>=8.1.0",
     "rich>=13.0.0",
+
+    # Core ML
+    "numpy>=1.24.0,<2.0",
+    "onnx>=1.12.0,<1.19.0",
+
+    # System metrics
     "psutil>=5.9.0",
+
+    # CoreML (macOS only — required for CoreML backend)
+    "coremltools>=7.0",
+
+    # ONNX conversion
+    "onnx2torch>=1.5.0",
+    "torch>=2.0.0",
 ]
 
 [project.optional-dependencies]
+
+# TFLite backend — Android/mobile deployment
+tflite = [
+    "tensorflow>=2.15.0,<2.18.0",
+    "onnx2tf==1.28.8",
+    "onnxsim==0.4.30",
+    "sng4onnx>=2.0.1",
+    "onnx-graphsurgeon>=0.3.27",
+    "ai-edge-litert>=1.0.0",
+]
+
+# S3-compatible remote storage (AWS S3, Cloudflare R2, Backblaze B2)
+s3 = [
+    "boto3>=1.26.0",
+]
+
+# PDF report export
+pdf = [
+    "weasyprint>=60.0",
+]
+
+# Development tools
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -40,6 +71,19 @@ dev = [
     "mypy>=1.0.0",
     "flake8>=6.0.0",
     "isort>=5.12.0",
+    "boto3>=1.26.0",
+]
+
+# Everything
+all = [
+    "boto3>=1.26.0",
+    "tensorflow>=2.15.0,<2.18.0",
+    "onnx2tf==1.28.8",
+    "onnxsim==0.4.30",
+    "sng4onnx>=2.0.1",
+    "onnx-graphsurgeon>=0.3.27",
+    "ai-edge-litert>=1.0.0",
+    "weasyprint>=60.0",
 ]
 
 [project.scripts]

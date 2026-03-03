@@ -244,12 +244,11 @@ class ExperimentManager:
         deleted_by: Optional[str] = None,
     ) -> None:
 
-        with self._transaction() as tx:
-
-            row = tx.fetch_one(
+        with self._registry._connect() as conn:
+            row = conn.execute(
                 "SELECT deleted_at FROM experiments WHERE experiment_id = ?",
                 (str(experiment_id),),
-            )
+            ).fetchone()
 
             if not row:
                 raise NotFoundError("Experiment not found")
@@ -257,7 +256,7 @@ class ExperimentManager:
             if row["deleted_at"] is not None:
                 raise ConflictError("Experiment already deleted")
 
-            result = tx.execute(
+            result = conn.execute(
                 """
                 UPDATE experiments
                 SET deleted_at = ?
@@ -267,9 +266,9 @@ class ExperimentManager:
             )
 
             if result.rowcount != 1:
-                raise InfrastructureError(
-                    "Unexpected row count during delete"
-                )
+                raise InfrastructureError("Unexpected row count during delete")
+
+            conn.commit()
 
 
     # ========================================================

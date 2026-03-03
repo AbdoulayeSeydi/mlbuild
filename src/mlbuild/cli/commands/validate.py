@@ -18,6 +18,41 @@ from ...benchmark.runner import CoreMLBenchmarkRunner, ComputeUnit
 console = Console()
 
 
+def _benchmark_build(build, runs, warmup, compute_unit):
+    """Route to correct benchmark runner based on build format."""
+    if build.format == "tflite":
+        from ...backends.tflite.benchmark_runner import TFLiteBenchmarkRunner
+
+        runner = TFLiteBenchmarkRunner()
+        metrics = runner.benchmark(
+            model_path=Path(build.artifact_path),
+            runs=runs,
+            warmup=warmup,
+        )
+        # Return a simple namespace matching the fields we need
+        class _Result:
+            latency_p50 = metrics["p50_ms"]
+            latency_p95 = metrics["p95_ms"]
+            latency_p99 = metrics["p99_ms"]
+            memory_peak_mb = max(metrics["memory_rss_mb"], 0.0)
+        return _Result()
+
+    else:
+        cu_map = {
+            "all": ComputeUnit.ALL,
+            "cpu": ComputeUnit.CPU_ONLY,
+            "gpu": ComputeUnit.CPU_AND_GPU,
+        }
+        runner = CoreMLBenchmarkRunner(
+            model_path=Path(build.artifact_path),
+            compute_unit=cu_map[compute_unit],
+            warmup_runs=warmup,
+            benchmark_runs=runs,
+        )
+        result, _ = runner.run(build_id=build.build_id, return_raw=True)
+        return result
+
+
 @click.command()
 @click.argument('build_id')
 @click.option('--max-latency', type=float, help='Maximum p50 latency in ms')
@@ -41,11 +76,11 @@ def validate(
 ):
     """
     Validate build against performance constraints.
-    
+
     Exit codes:
         0 = All constraints passed
         1 = One or more constraints failed
-    
+
     Examples:
         mlbuild validate <build> --max-latency 10 --max-memory 500
         mlbuild validate <build> --max-latency 10 --ci
@@ -53,18 +88,17 @@ def validate(
     if not ci:
         console.print(f"\n[bold]Constraint Validation[/bold]")
         console.print(f"Build: {build_id[:16]}...\n")
-    
-    # Get build from registry
+
     registry = LocalRegistry()
     build = registry.resolve_build(build_id)
-    
+
     if not build:
         if not ci:
             console.print(f"[red]Build not found: {build_id}[/red]")
         sys.exit(1)
-    
+
     violations = []
-    
+
     # Size constraint (no benchmark needed)
     if max_size is not None:
         size_mb = float(build.size_mb)
@@ -75,64 +109,46 @@ def validate(
                 'actual': size_mb,
                 'unit': 'MB',
             })
-    
-    # Performance constraints (need benchmark)
+
+    # Performance constraints
     needs_benchmark = any([max_latency, max_p95, max_memory])
-    
+
     if needs_benchmark:
-        if build.format != "coreml":
-            if not ci:
-                console.print(f"[yellow]Benchmarking only works for CoreML builds[/yellow]")
-            # Can still check size
-            if violations:
-                _report_violations(violations, ci)
-                sys.exit(1)
-            sys.exit(0)
-        
         if not ci:
-            console.print(f"[dim]Running benchmark...[/dim]\n")
-        
-        # Map compute unit
-        cu_map = {
-            'all': ComputeUnit.ALL,
-            'cpu': ComputeUnit.CPU_ONLY,
-            'gpu': ComputeUnit.CPU_AND_GPU,
-        }
-        
-        runner = CoreMLBenchmarkRunner(
-            model_path=Path(build.artifact_path),
-            compute_unit=cu_map[compute_unit],
-            warmup_runs=warmup,
-            benchmark_runs=runs,
-        )
-        
-        result, _ = runner.run(build_id=build.build_id, return_raw=True)
-        
-        # Check latency constraints
-        if max_latency is not None and result.latency_p50 > max_latency:
-            violations.append({
-                'constraint': 'latency_p50',
-                'limit': max_latency,
-                'actual': result.latency_p50,
-                'unit': 'ms',
-            })
-        
-        if max_p95 is not None and result.latency_p95 > max_p95:
-            violations.append({
-                'constraint': 'latency_p95',
-                'limit': max_p95,
-                'actual': result.latency_p95,
-                'unit': 'ms',
-            })
-        
-        if max_memory is not None and result.memory_peak_mb > max_memory:
-            violations.append({
-                'constraint': 'memory',
-                'limit': max_memory,
-                'actual': result.memory_peak_mb,
-                'unit': 'MB',
-            })
-    
+            console.print(f"[dim]Running benchmark ({build.format})...[/dim]\n")
+
+        try:
+            result = _benchmark_build(build, runs, warmup, compute_unit)
+
+            if max_latency is not None and result.latency_p50 > max_latency:
+                violations.append({
+                    'constraint': 'latency_p50',
+                    'limit': max_latency,
+                    'actual': result.latency_p50,
+                    'unit': 'ms',
+                })
+
+            if max_p95 is not None and result.latency_p95 > max_p95:
+                violations.append({
+                    'constraint': 'latency_p95',
+                    'limit': max_p95,
+                    'actual': result.latency_p95,
+                    'unit': 'ms',
+                })
+
+            if max_memory is not None and result.memory_peak_mb > max_memory:
+                violations.append({
+                    'constraint': 'memory',
+                    'limit': max_memory,
+                    'actual': result.memory_peak_mb,
+                    'unit': 'MB',
+                })
+
+        except Exception as e:
+            if not ci:
+                console.print(f"[red]Benchmark failed: {e}[/red]")
+            sys.exit(1)
+
     # Report results
     if violations:
         _report_violations(violations, ci)
@@ -144,40 +160,31 @@ def validate(
 
 
 def _report_violations(violations, ci_mode):
-    """Report constraint violations."""
     if ci_mode:
-        # CI mode: minimal output
         print(f"FAILED: {len(violations)} constraint(s) violated")
         for v in violations:
             print(f"  {v['constraint']}: {v['actual']:.2f}{v['unit']} > {v['limit']}{v['unit']}")
         return
-    
-    # Interactive mode: rich output
+
     console.print(Panel(
         f"[bold red]{len(violations)} Constraint Violation(s)[/bold red]",
         border_style="red"
     ))
     console.print()
-    
+
     table = Table(show_header=True, header_style="bold red")
     table.add_column("Constraint")
     table.add_column("Limit", justify="right")
     table.add_column("Actual", justify="right")
     table.add_column("Violation", justify="right")
-    
+
     for v in violations:
         limit_str = f"{v['limit']:.2f} {v['unit']}"
         actual_str = f"{v['actual']:.2f} {v['unit']}"
         over = v['actual'] - v['limit']
         over_pct = (over / v['limit']) * 100
         violation_str = f"+{over:.2f} ({over_pct:.1f}% over)"
-        
-        table.add_row(
-            v['constraint'],
-            limit_str,
-            actual_str,
-            violation_str,
-        )
-    
+        table.add_row(v['constraint'], limit_str, actual_str, violation_str)
+
     console.print(table)
     console.print()

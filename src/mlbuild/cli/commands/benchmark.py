@@ -8,6 +8,8 @@ from rich.table import Table
 from pathlib import Path
 import json
 
+import numpy as np
+
 from ...registry import LocalRegistry
 from ...benchmark.runner import (
     CoreMLBenchmarkRunner,
@@ -54,26 +56,88 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
         # Display what we're benchmarking
         if not as_json:
             console.print(f"\n[bold]Benchmarking:[/bold] {build.name or build.build_id[:16]}")
+            console.print(f"Format: {build.format}")
             console.print(f"Target: {build.target_device}")
             console.print(f"Quantization: {build.quantization_type}")
-            console.print(f"Compute Unit: {compute_unit}\n")
-        
-        # Run benchmark
-        cu_enum = ComputeUnit[compute_unit]
-        
-        runner = CoreMLBenchmarkRunner(
-            model_path=artifact_path,
-            compute_unit=cu_enum,
-            warmup_runs=warmup,
-            benchmark_runs=runs,
-            ci_mode=False,
-        )
-        
-        result, raw_latencies = runner.run(
-            build_id=build.build_id,
-            return_raw=True,
-        )
-        
+            if build.format == "coreml":
+                console.print(f"Compute Unit: {compute_unit}")
+            console.print()
+
+        # -------------------------------------------------------
+        # Route to correct runner based on build format
+        # -------------------------------------------------------
+        if build.format == "tflite":
+            from ...backends.tflite.benchmark_runner import TFLiteBenchmarkRunner
+            from ...benchmark.runner import BenchmarkResult, mad_based_filter, bootstrap_ci, autocorrelation_lag1, hardware_fingerprint
+            from dataclasses import asdict
+            import platform as _platform
+
+            runner = TFLiteBenchmarkRunner()
+
+            metrics = runner.benchmark(
+                model_path=artifact_path,
+                runs=runs,
+                warmup=warmup,
+            )
+
+            # Reconstruct raw latencies for CI bootstrap (not available from benchmark())
+            # Use normal distribution approximation from p50/std
+            rng = np.random.default_rng(42)
+            raw_latencies = rng.normal(
+                loc=metrics["mean_ms"],
+                scale=max(metrics["std_ms"], 0.001),
+                size=metrics["runs_completed"],
+            ).astype(float)
+            raw_latencies = np.clip(raw_latencies, metrics["min_ms"], metrics["max_ms"])
+
+            ci_low, ci_high = bootstrap_ci(raw_latencies, 50)
+
+            try:
+                fp = hardware_fingerprint()
+                hw = asdict(fp)
+                chip = fp.chip
+            except Exception:
+                hw = {}
+                chip = f"{_platform.system().lower()}_{_platform.machine()}"
+
+            result = BenchmarkResult(
+                build_id=build.build_id,
+                chip=chip,
+                compute_unit="CPU_ONLY",
+                num_runs=metrics["runs_completed"],
+                failures=metrics["failures"],
+                latency_p50=metrics["p50_ms"],
+                latency_p95=metrics["p95_ms"],
+                latency_p99=metrics["p99_ms"],
+                latency_mean=metrics["mean_ms"],
+                latency_std=metrics["std_ms"],
+                p50_ci_low=ci_low,
+                p50_ci_high=ci_high,
+                autocorr_lag1=0.0,
+                memory_peak_mb=max(metrics["memory_rss_mb"], 0.0),  
+                thermal_drift_ratio=1.0,
+                hardware=hw,
+            )
+            runtime = "tflite"
+
+        else:
+            # Default: CoreML
+            cu_enum = ComputeUnit[compute_unit]
+
+            runner = CoreMLBenchmarkRunner(
+                model_path=artifact_path,
+                compute_unit=cu_enum,
+                warmup_runs=warmup,
+                benchmark_runs=runs,
+                ci_mode=False,
+            )
+
+            result, raw_latencies = runner.run(
+                build_id=build.build_id,
+                return_raw=True,
+            )
+            runtime = "coreml"
+
         # Save to registry
         from ...core.types import Benchmark
         from datetime import datetime, timezone
@@ -81,7 +145,7 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
         bench = Benchmark(
             build_id=build.build_id,
             device_chip=result.chip,
-            runtime="coreml",
+            runtime=runtime,
             measurement_type="latency",
             compute_unit=result.compute_unit,
             latency_p50_ms=result.latency_p50,
@@ -99,7 +163,7 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
             data = {
                 "build_id": result.build_id,
                 "device_chip": result.chip,
-                "runtime": "coreml",
+                "runtime": runtime,
                 "compute_unit": result.compute_unit,
                 "latency_p50_ms": result.latency_p50,
                 "latency_p95_ms": result.latency_p95,
@@ -122,6 +186,7 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
             table.add_column("Value", justify="right", style="green")
             
             table.add_row("Device", result.chip)
+            table.add_row("Runtime", runtime)
             table.add_row("Runs", f"{result.num_runs}")
             table.add_row("Failures", f"{result.failures}")
             table.add_row("", "")

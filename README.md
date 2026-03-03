@@ -9,9 +9,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/mlbuild.svg)](https://pypi.org/project/MLBuild/)
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/AbdoulayeSeydi/mlbuild)
 
-MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&B track training experiments, MLBuild enforces production SLAs -- automatically benchmarking inference performance, validating against thresholds, and blocking regressions in CI.
+MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&B track training experiments, MLBuild enforces production SLAs — automatically benchmarking inference performance, validating against thresholds, blocking regressions in CI, and generating deployment-ready reports.
 
-[Installation](#installation) - [Quick Start](#quick-start) - [Documentation](#documentation) - [Roadmap](#roadmap)
+[Installation](#installation) · [Quick Start](#quick-start) · [Documentation](#documentation) · [Roadmap](#roadmap)
 
 </div>
 
@@ -21,13 +21,11 @@ MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&
 
 | Feature | Status |
 |---------|--------|
-| Input formats | ONNX only |
-| Backends | CoreML, ONNX Runtime |
-| Storage | Local only |
-| Targets | Apple Silicon, A-series chips |
-| Platform | macOS only |
-
-> Cloud storage, Android, TFLite, TensorRT, and Qualcomm QNN support are on the [roadmap](#roadmap).
+| Input formats | ONNX, TFLite |
+| Backends | CoreML, TFLite, ONNX Runtime |
+| Storage | Local + S3-compatible (AWS S3, R2, B2) |
+| Targets | Apple Silicon, A-series, Android (arm64) |
+| Platform | macOS |
 
 ---
 
@@ -42,7 +40,7 @@ mypy                ✓
 # But in production
 Latency:  8ms  --> 15ms   (88% slower)
 Memory:   50MB --> 120MB  (140% more)
-P95:      12ms --> 25ms   (108% worse)
+Size:     6MB  --> 10MB   (67% larger)
 
 # Nobody caught it until users complained
 ```
@@ -56,15 +54,16 @@ P95:      12ms --> 25ms   (108% worse)
 ```bash
 # Add one step to your CI pipeline
 mlbuild build --model model.onnx --target apple_m1
-mlbuild compare baseline candidate --threshold 5 --ci
+mlbuild ci-check $BASELINE_ID $CANDIDATE_ID
 
 # Output:
-# REGRESSION DETECTED: 12% slower (threshold: 5%)
-# Build FAILED
-# PR blocked
+# ⚠ REGRESSION DETECTED
+#   • latency +12.3% > 10.0% threshold
+#   • size +8.1% > 5.0% threshold
+# Exit code: 1 — PR blocked
 ```
 
-Catch performance regressions before they reach production.
+Catch latency AND size regressions before they reach production.
 
 ---
 
@@ -72,13 +71,16 @@ Catch performance regressions before they reach production.
 
 | Feature | MLflow / W&B / DVC | MLBuild |
 |---------|-------------------|---------|
-| Track training experiments | Yes | Yes |
+| Track training experiments | Yes | No (use MLflow) |
 | Automated p50/p95/p99 benchmarking | Manual | Built-in |
-| CI fails if >5% slower | Not native | One command |
-| SLA enforcement (max latency 10ms) | DIY scripts | `--max-latency 10` |
-| Layer-by-layer profiling | No | `--analyze-warmup` |
+| CI fails on latency regression | Not native | `mlbuild ci-check` |
+| CI fails on model size regression | Not native | `--size-threshold` |
+| Quantization tradeoff analysis | No | `mlbuild compare-quantization` |
+| Performance reports | No | `mlbuild report` |
+| S3-compatible remote storage | No | Built-in |
+| TFLite benchmarking | No | Built-in |
 
-MLBuild complements your existing stack -- it doesn't replace it.
+MLBuild complements your existing stack — it doesn't replace it.
 
 ---
 
@@ -89,12 +91,22 @@ pip install mlbuild
 mlbuild doctor
 ```
 
+For TFLite support:
+```bash
+pip install "mlbuild[tflite]"
+```
+
+For S3 remote storage:
+```bash
+pip install "mlbuild[s3]"
+```
+
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Build model
+# 1. Build and convert model
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16
 
 # 2. Benchmark (automatic p50/p95/p99)
@@ -103,31 +115,35 @@ mlbuild benchmark <build-id>
 # 3. Validate SLAs
 mlbuild validate <build-id> --max-latency 10 --max-p95 15 --ci
 
-# 4. Compare vs baseline
-mlbuild compare baseline candidate --threshold 5 --ci
+# 4. Compare vs baseline (latency + size)
+mlbuild compare baseline candidate --threshold 5 --size-threshold 5 --ci
 
-# 5. Tag for production
+# 5. Analyze quantization tradeoffs
+mlbuild compare-quantization fp32-build int8-build
+
+# 6. Generate performance report
+mlbuild report <build-id> --open
+
+# 7. Tag for production
 mlbuild tag create <build-id> production
 ```
 
 ### GitHub Actions Integration
 
-Add to `.github/workflows/model-ci.yml`:
-
 ```yaml
 - name: Performance Validation
   run: |
-    pip install mlbuild
+    pip install "mlbuild[tflite,s3]"
 
     # Build model
-    mlbuild build --model models/model.onnx --target apple_m1
+    mlbuild build --model models/model.onnx --target android_arm64
     BUILD_ID=$(mlbuild log --limit 1 --json | jq -r '.[0].build_id')
 
-    # Validate SLAs
-    mlbuild validate $BUILD_ID --max-p95 10 --ci
-
-    # Compare vs production
-    mlbuild compare production $BUILD_ID --threshold 5 --ci
+    # Gate: block PR if latency or size regresses
+    mlbuild ci-check $BASELINE_ID $BUILD_ID \
+      --latency-threshold 10 \
+      --size-threshold 5 \
+      --json
 ```
 
 See `.github/workflows/examples/` for complete examples.
@@ -142,6 +158,7 @@ See `.github/workflows/examples/` for complete examples.
 
 ```bash
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16 --name "v2.0"
+mlbuild build --model model.onnx --target android_arm64 --quantize int8
 ```
 
 #### Benchmark
@@ -163,13 +180,127 @@ mlbuild validate <build-id> \
 #### Compare and Detect Regressions
 
 ```bash
+# Compare with independent latency + size thresholds
 mlbuild compare baseline candidate \
   --threshold 5 \
+  --size-threshold 10 \
   --metric p95 \
   --ci
+
+# Dedicated CI gate (cleaner defaults for pipelines)
+mlbuild ci-check baseline candidate
+mlbuild ci-check baseline candidate --latency-threshold 10 --size-threshold 5
+mlbuild ci-check baseline candidate --strict   # any positive delta fails
+mlbuild ci-check baseline candidate --json     # machine-readable output
 ```
 
-#### Profile Layers
+**Exit codes:**
+- `0` — no regression (safe to ship)
+- `1` — regression detected (block the PR)
+- `2` — error (infra failure, check logs)
+
+#### Quantization Tradeoff Analysis
+
+```bash
+# Analyze the accuracy/size/latency tradeoff between two quantization levels
+mlbuild compare-quantization fp32-build int8-build
+
+# Options
+mlbuild compare-quantization fp32-build int8-build --accuracy-samples 100
+mlbuild compare-quantization fp32-build int8-build --skip-accuracy  # faster
+mlbuild compare-quantization fp32-build int8-build --json
+```
+
+**Output includes:**
+- Size reduction %
+- Latency improvement %
+- Accuracy loss % (relative error on synthetic inputs)
+- Cosine similarity (output ranking preservation)
+- Tradeoff score and deployment recommendation
+
+#### Performance Report
+
+```bash
+# Generate self-contained HTML report
+mlbuild report <build-id>
+mlbuild report <build-id> --open              # open in browser immediately
+mlbuild report <build-id> --output report.html
+mlbuild report <build-id> --format pdf        # requires: pip install weasyprint
+```
+
+**Report includes:**
+- Latest benchmark metrics (p50/p95/p99, throughput, memory)
+- Full benchmark history
+- Build metadata and quantization details
+- Related builds with size comparison
+- Deployment recommendations
+
+#### Deep Profiling
+
+```bash
+# TFLite: full 6-feature deep profile (no device required)
+mlbuild profile <build-id> --deep
+
+# CoreML: cold start decomposition (all formats)
+#         per-layer timing, memory flow, bottleneck classification,
+#         and fusion detection (NeuralNetwork format only)
+mlbuild profile <build-id> --deep
+
+# Options
+mlbuild profile <build-id> --deep --top 20           # show top 20 layers/ops
+mlbuild profile <build-id> --deep --runs 100         # more runs for stability
+mlbuild profile <build-id> --deep --int8-build <id>  # TFLite: quant sensitivity
+```
+
+**TFLite deep profiling features (`--deep`):**
+
+| # | Feature | Description |
+|---|---------|-------------|
+| ① | Per-op timing | Real hardware timing via TFLite's built-in op profiler |
+| ② | Memory flow | Activation memory at each layer boundary, peak flagged |
+| ③ | Bottleneck classification | COMPUTE vs MEMORY bound per op (arithmetic intensity) |
+| ④ | Cold start decomposition | Load → first inference → stable, with warmup sparkline |
+| ⑤ | Quantization sensitivity | Per-layer fp32 vs int8 divergence (requires `--int8-build`) |
+| ⑥ | Fusion detection | Fused kernels identified + missed fusion opportunities flagged |
+
+```bash
+# TFLite example
+mlbuild profile <build-id> --deep
+
+# 1 · Per-Op Timing
+# ┌────┬──────────────────────────┬──────────────────┬───────────┬─────────┬───────┐
+# │ #  │ Op Name                  │ Type             │ Time (ms) │ % Total │ Fused │
+# ├────┼──────────────────────────┼──────────────────┼───────────┼─────────┼───────┤
+# │  0 │ conv2d/Conv2D            │ CONV_2D          │     2.141 │  38.2%  │   ✓   │
+# │  1 │ depthwise_conv/...       │ DEPTHWISE_CONV   │     1.872 │  33.4%  │   ✓   │
+# │  2 │ MobilenetV1/Predictions  │ FULLY_CONNECTED  │     0.431 │   7.7%  │   —   │
+# └────┴──────────────────────────┴──────────────────┴───────────┴─────────┴───────┘
+
+# With int8 quant sensitivity:
+mlbuild profile <build-id> --deep --int8-build <int8-build-id>
+
+# 5 · Quantization Sensitivity Map
+# ┌──────────────────────┬──────────┬──────────┬────────────┬────────────┬─────────────┐
+# │ Layer                │ MSE      │ MAE      │ Max Error  │ Cosine Sim │ Sensitivity │
+# ├──────────────────────┼──────────┼──────────┼────────────┼────────────┼─────────────┤
+# │ conv2d/BiasAdd       │ 0.000021 │ 0.003412 │ 0.021443   │ 0.9991     │ LOW         │
+# │ predictions/Softmax  │ 0.000847 │ 0.018234 │ 0.094312   │ 0.9743     │ HIGH        │
+# └──────────────────────┴──────────┴──────────┴────────────┴────────────┴─────────────┘
+```
+
+**CoreML deep profiling features (`--deep`):**
+
+| # | Feature | NeuralNetwork | MLProgram |
+|---|---------|---------------|-----------|
+| ① | Per-layer timing | ✓ Sliced subgraph benchmarking | ✗ Requires Xcode |
+| ② | Memory flow | ✓ Estimated from weight dims | ✗ Requires Xcode |
+| ③ | Bottleneck classification | ✓ COMPUTE vs MEMORY bound | ✗ Requires Xcode |
+| ④ | Cold start decomposition | ✓ | ✓ |
+| ⑤ | Fusion detection | ✓ Conv+Relu, BN+Scale, etc. | ✗ Requires Xcode |
+
+> **Note:** coremltools 7+ converts all models to MLProgram format regardless of deployment target. MLProgram models are compiled by the ANE toolchain at load time — per-layer slicing is not possible without Xcode Instruments. Cold start decomposition (④) is available for all CoreML builds.
+
+#### Profile Layers (Standard)
 
 ```bash
 mlbuild profile <build-id> --top 15 --analyze-warmup
@@ -186,75 +317,96 @@ mlbuild tag create <build-id> v1.0.0
 #### Experiment Tracking
 
 ```bash
-mlbuild experiment create "hyperparameter-search"
-mlbuild run start --experiment "hyperparameter-search"
-mlbuild run log-param learning_rate 0.001
-mlbuild run log-metric accuracy 0.95
+mlbuild experiment create "quantization-search"
+mlbuild run start --experiment "quantization-search"
+mlbuild run log-param quantization int8
+mlbuild run log-metric latency_p50 5.6
 mlbuild run end
 ```
 
 #### Remote Storage
 
 ```bash
-mlbuild remote add prod --backend local --path /storage --default
-mlbuild push v1.0.0
-mlbuild pull v1.0.0
+# Set up S3-compatible remote (one-time)
+mlbuild remote add prod \
+  --backend s3 \
+  --bucket your-bucket \
+  --region us-east-1
+
+# Push/pull/sync builds
+mlbuild push <build-id>
+mlbuild pull <build-id>
 mlbuild sync
+```
+
+**Supported backends:**
+- AWS S3
+- Cloudflare R2 (recommended — free 10 GB)
+- Backblaze B2
+- Any S3-compatible storage
+
+---
+
+## Quantization Workflow
+
+A common workflow for mobile deployment:
+
+```bash
+# 1. Build FP32 baseline
+mlbuild build --model model.onnx --target android_arm64 --name mobilenet-fp32
+
+# 2. Build INT8 variant
+mlbuild build --model model.onnx --target android_arm64 --quantize int8 --name mobilenet-int8
+
+# 3. Analyze tradeoffs
+mlbuild compare-quantization mobilenet-fp32 mobilenet-int8
+
+# Output:
+# Size:     6.69 MB → 3.82 MB  (-42.9%)
+# Latency:  15.3 ms → 5.6 ms   (-63.7%)
+# Cosine similarity: 0.9718
+# Recommendation: INT8 promising — validate on real data
+
+# 4. Generate report with all findings
+mlbuild report mobilenet-int8 --open
 ```
 
 ---
 
-## Use Cases
-
-### Mobile ML Teams
-
-**Problem:** Ship models to billions of devices. 5% slower = millions in battery and compute costs.
+## CI/CD Regression Gate
 
 ```bash
-mlbuild build --model model.onnx --target apple_a17
-mlbuild validate <build-id> --max-latency 8 --ci
-# Blocks PR if too slow for iPhone 15
-```
+# In your CI pipeline:
+mlbuild ci-check $BASELINE_ID $CANDIDATE_ID
+echo "Exit: $?"   # 0 = pass, 1 = regression, 2 = error
 
-### Edge AI (Autonomous Vehicles, Drones)
-
-**Problem:** Can't afford production slowdowns in safety-critical systems.
-
-```bash
-mlbuild compare baseline candidate --threshold 2 --ci
-# Fails if >2% regression
-```
-
-### SLA-Critical APIs
-
-**Problem:** Sub-10ms inference requirements for real-time applications.
-
-```bash
-mlbuild validate <build-id> --max-p99 10 --ci
-# Enforces 99th percentile < 10ms
+# With JSON output for log parsing:
+mlbuild ci-check $BASELINE_ID $CANDIDATE_ID --json
+# {
+#   "regression_detected": false,
+#   "change": { "p50": -63.75, "size": -42.86 },
+#   "thresholds": { "latency_pct": 10.0, "size_pct": 5.0 }
+# }
 ```
 
 ---
 
 ## Architecture
 
-MLBuild fits into your existing ML stack:
-
 ```
 Training Phase
-├── Experiment Tracking:  MLflow / W&B / Neptune
-└── Data Versioning:      DVC
+├── Experiment Tracking:   MLflow / W&B / Neptune
+└── Data Versioning:       DVC
 
-              |
-              v
+              ↓
 
 Production Phase
-├── Model Building:        MLBuild
-├── Performance Validation: MLBuild  <-- new layer
-└── Deployment:            GitHub Actions / K8s
+├── Model Building:         MLBuild build
+├── Performance Validation: MLBuild ci-check     ← regression gate
+├── Quantization Analysis:  MLBuild compare-quantization
+├── Reporting:              MLBuild report
+└── Deployment:             GitHub Actions / K8s
 ```
-
-MLBuild works WITH your existing tools, not against them.
 
 ---
 
@@ -265,125 +417,132 @@ MLBuild works WITH your existing tools, not against them.
 ```python
 # Content-addressed storage (Git-style)
 build_id = sha256(source_hash + config_hash + env_fingerprint)
-
 # Same inputs = Same output (byte-for-byte)
 ```
 
 ### 2. Automated Benchmarking
 
 ```python
-# Runs 100 iterations with 20 warmup
+# Runs N iterations with warmup
 # Calculates p50, p95, p99, mean, std
-# Measures memory, latency, throughput
+# Measures memory RSS delta, throughput
+# Outlier trimming (top/bottom 5%)
 ```
 
-### 3. SLA Enforcement
+### 3. Dual Regression Detection
 
 ```python
-if p95_latency > max_p95:
-    fail_build()  # Exit code 1
-
-if regression > threshold:
-    block_pr()    # Prevents merge
+# Independent thresholds for latency and size
+latency_regression = latency_change_pct > latency_threshold
+size_regression    = size_change_pct    > size_threshold
+regression_detected = latency_regression or size_regression
 ```
 
-### 4. Regression Detection
+### 4. Quantization Tradeoff Scoring
 
 ```python
-baseline_p95  = 8.2ms
-candidate_p95 = 9.5ms
-change = ((9.5 - 8.2) / 8.2) * 100  # 15.8%
-
-if change > threshold:  # 5%
-    fail_build()
+score = (size_reduction% + latency_improvement%) / 2 - accuracy_loss% * 2
+# accuracy penalized 2x — impacts users directly
 ```
-
----
-
-## vs. Existing Tools
-
-### vs. MLflow
-- **MLflow:** Tracks training experiments, logs metrics manually
-- **MLBuild:** Automates inference benchmarking, enforces SLAs in CI
-
-Use both: Track experiments in MLflow, validate performance in MLBuild.
-
-### vs. DVC
-- **DVC:** Versions data and models, Git-native pipelines
-- **MLBuild:** Benchmarks models, enforces performance thresholds
-
-Use both: Version with DVC, validate with MLBuild.
-
-### vs. Weights and Biases
-- **W&B:** Beautiful dashboards, experiment collaboration
-- **MLBuild:** Automated performance CI/CD, regression detection
-
-Use both: Visualize in W&B, enforce in MLBuild.
 
 ---
 
 ## Features
 
 ### Build and Convert
-- ONNX to CoreML conversion
-- Quantization (FP32 / FP16 / INT8)
-- Multi-target support (Apple Silicon, A-series)
+- ONNX → CoreML conversion (Apple Silicon, A-series)
+- ONNX → TFLite conversion (Android arm64)
+- Quantization: FP32 / FP16 / INT8
 - Deterministic builds (content-addressed)
 
 ### Performance Validation
 - Automated p50/p95/p99 benchmarking
 - SLA enforcement (`--max-latency`, `--max-memory`)
-- Regression detection (`--threshold 5`)
-- Layer-by-layer profiling
+- Latency regression detection
+- Model size regression detection
+- Statistical significance testing (Welch's t-test)
 
-### Experiment Tracking
-- MLflow-style run tracking
-- Parameter and metric logging
-- Build-to-experiment linkage
+### Deep Profiling (`--deep`)
+- **TFLite:** Per-op timing (real hardware), tensor memory flow, COMPUTE/MEMORY bottleneck classification, cold start decomposition, per-layer quantization sensitivity (fp32 vs int8), op fusion detection
+- **CoreML:** Cold start decomposition (all formats); per-layer timing, memory flow, bottleneck classification, and fusion detection (NeuralNetwork format only)
 
-### Version Control
-- Docker-style tags (v1.0.0, production)
-- Build history and diffing
-- Immutable artifacts
+### Quantization Analysis
+- Accuracy estimation on synthetic inputs
+- Cosine similarity (output ranking preservation)
+- Tradeoff scoring with deployment recommendation
+- Support for TFLite int8/fp16 pairs
+
+### Performance Reports
+- Self-contained HTML (no external dependencies)
+- Benchmark history table
+- Related builds comparison
+- Deployment recommendations
+- Optional PDF export (requires weasyprint)
 
 ### Remote Storage
-- Git-style push/pull
-- Prefix resolution (1ddf07c1)
-- Bidirectional sync
-- Local filesystem (S3 on roadmap)
+- S3-compatible backends (AWS, R2, B2)
+- Git-style push/pull/sync
+- Prefix resolution
+- Integrity verification (SHA-256)
 
 ### CI/CD Integration
+- `mlbuild ci-check` — dedicated regression gate
+- Exit codes: 0 (pass) / 1 (regression) / 2 (error)
+- JSON output for log parsing
 - GitHub Actions examples
-- Exit codes for CI failure
-- JSON output for automation
-- Performance reports in PRs
 
 ---
 
-## Roadmap
+## Project Structure
 
-MLBuild is currently macOS-only with ONNX input and CoreML/ONNX Runtime backends. Here is what is coming next:
+```
+mlbuild/
+├── src/mlbuild/
+│   ├── cli/
+│   │   ├── commands/
+│   │   │   ├── benchmark.py           # mlbuild benchmark
+│   │   │   ├── compare.py             # mlbuild compare + ci-check
+│   │   │   ├── compare_quantization.py # mlbuild compare-quantization
+│   │   │   ├── report.py              # mlbuild report
+│   │   │   ├── profile.py             # mlbuild profile
+│   │   │   ├── validate.py            # mlbuild validate
+│   │   │   ├── push.py / pull.py      # remote storage
+│   │   │   └── ...
+│   │   └── main.py                    # CLI entry point
+│   ├── backends/
+│   │   ├── coreml/                    # CoreML exporter + deep profiler
+│   │   ├── tflite/                    # TFLite backend + deep profiler
+│   │   └── onnxruntime/               # ONNX Runtime backend
+│   ├── benchmark/                     # Benchmark runner + stats
+│   ├── profiling/                     # Layer-by-layer profiling + cold start
+│   ├── registry/                      # SQLite registry (WAL mode)
+│   ├── storage/                       # S3-compatible remote storage
+│   └── experiments/                   # Experiment + run tracking
+├── tests/
+├── pyproject.toml
+└── README.md
+```
 
-### Phase 1 -- More Runtimes
-- **TFLite backend** -- support TensorFlow Lite models for mobile deployment
+---
 
-### Phase 2 -- Device-Connected Benchmarking
-- **Xcode Instruments integration** -- benchmark directly on connected iOS devices with real hardware profiling
-- **Android Studio integration** -- benchmark on connected Android devices using Android profiling tools
+## vs. Existing Tools
 
-### Phase 3 -- More Backends
-- **TensorRT** -- NVIDIA GPU inference optimization and benchmarking
-- **Qualcomm QNN** -- Snapdragon NPU support for on-device AI
+| | MLflow | DVC | W&B | **MLBuild** |
+|---|---|---|---|---|
+| Training experiments | ✓ | — | ✓ | — |
+| Data versioning | — | ✓ | — | — |
+| Inference benchmarking | Manual | No | No | **Automated** |
+| CI regression gate | No | No | No | **Built-in** |
+| Size regression detection | No | No | No | **Built-in** |
+| Quantization analysis | No | No | No | **Built-in** |
+| Per-layer deep profiling | No | No | No | **Built-in** |
+| Performance reports | No | No | Dashboard | **HTML/PDF** |
 
-### Phase 4 -- Cloud
-- **Remote storage** -- S3, GCS, Azure Blob for artifact storage and sync
-- **Cloud benchmarking** -- run benchmarks on remote hardware without local setup
+Use MLflow/W&B for training. Use MLBuild for inference.
 
 ---
 
 ## Development
-
-### Setup
 
 ```bash
 git clone https://github.com/AbdoulayeSeydi/mlbuild.git
@@ -393,93 +552,39 @@ source venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Run Tests
-
 ```bash
 pytest tests/
-```
-
-### Project Structure
-
-```
-mlbuild/
-├── src/mlbuild/
-│   ├── cli/                  # CLI commands
-│   │   ├── commands/         # Individual command implementations
-│   │   └── main.py           # CLI entry point
-│   ├── core/                 # Core types and logic
-│   │   ├── types.py          # Build, Benchmark, Run types
-│   │   ├── hash_utils.py     # Content addressing
-│   │   ├── environment.py    # Environment fingerprinting
-│   │   └── validation.py     # Build validation
-│   ├── backends/             # Model conversion backends
-│   │   ├── coreml/           # CoreML exporter
-│   │   └── onnxruntime/      # ONNX Runtime backend
-│   ├── benchmark/            # Performance measurement
-│   │   ├── runner.py         # Benchmark execution
-│   │   └── device_runner.py  # Device-specific runners
-│   ├── profiling/            # Layer-by-layer profiling
-│   │   ├── layer_profiler.py
-│   │   └── warmup_analyzer.py
-│   ├── registry/             # SQLite registry
-│   │   ├── local.py          # Local registry implementation
-│   │   └── schema.py         # Database schema
-│   ├── storage/              # Remote storage
-│   │   ├── backend.py        # Storage backend interfaces
-│   │   ├── local.py          # Local filesystem backend
-│   │   └── config.py         # Remote configuration
-│   ├── experiments/          # Experiment tracking
-│   │   ├── experiment.py     # Experiment management
-│   │   ├── manager.py        # Run management
-│   │   └── active_run.py     # Active run context
-│   ├── loaders/              # Model loaders
-│   │   └── onnx_loader.py
-│   └── visualization/        # Charts and visualization
-│       └── charts.py
-├── tests/
-│   ├── test_benchmark.py
-│   ├── test_artifact_hash.py
-│   └── conftest.py
-├── .github/
-│   └── workflows/
-│       └── examples/         # CI/CD examples
-├── pyproject.toml
-└── README.md
 ```
 
 ---
 
 ## Contributing
 
-Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
-- Development setup
-- Coding standards
-- PR process
-- Testing requirements
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and PR process.
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## Acknowledgments
+## Roadmap
 
-Inspired by:
-- [MLflow](https://mlflow.org) - Experiment tracking
-- [DVC](https://dvc.org) - Data versioning
-- [Git](https://git-scm.com) - Content-addressed storage
+### Phase 1 — Device-Connected Benchmarking *(next)*
+- Android ADB bridge — benchmark on connected Android devices without Android Studio
+- Xcode Instruments integration — real iPhone hardware profiling
 
----
+### Phase 2 — More Backends
+- TensorRT — NVIDIA GPU inference
+- Qualcomm QNN — Snapdragon NPU
 
-## Contact
-
-- Email: abdoulayeaseydi@gmail.com
+### Phase 3 — Cloud Benchmarking
+- Remote benchmark execution on cloud hardware
 
 ---
 
 <div align="center">
-Built by <a href="https://github.com/AbdoulayeSeydi">Abdoulaye Seydi</a>
+Built by <a href="https://github.com/AbdoulayeSeydi/mlbuild">Abdoulaye Seydi</a>
 </div>

@@ -191,10 +191,17 @@ class SyncEngine:
 
     def _stream_local(self):
         for build in self.registry.iter_builds_sorted():
-            yield {
-                "build_id": build.build_id,
-                "hash": build.artifact_hash,
-            }
+            # iter_builds_sorted may return dicts or objects
+            if isinstance(build, dict):
+                yield {
+                    "build_id": build["build_id"],
+                    "hash": build.get("artifact_hash") or build.get("hash", ""),
+                }
+            else:
+                yield {
+                    "build_id": build.build_id,
+                    "hash": getattr(build, "artifact_hash", ""),
+                }
 
     def _stream_remote(self):
         for page in self.backend.metadata.iter_builds():

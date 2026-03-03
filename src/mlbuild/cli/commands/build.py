@@ -119,14 +119,20 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
     type=click.Path(exists=True, path_type=Path),
 )
 @click.option(
+    "--backend",
+    type=click.Choice(["coreml", "tflite"]),
+    default="coreml",
+    help="Backend to use for conversion"
+)
+@click.option(
     "--target",
     required=True,
-    type=click.Choice(["apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1"]),
+    type=click.Choice(["apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1", "android_arm64", "android_arm32", "raspberry_pi"]),
 )
 @click.option("--name")
 @click.option(
     "--quantize",
-    type=click.Choice(["fp32", "fp16"]),
+    type=click.Choice(["fp32", "fp16", "int8"]),
     default="fp32",
 )
 @click.option("--notes")
@@ -146,14 +152,122 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
     # If backend has its own build method, use it
     if backend != "coreml":
         try:
-            build_obj = backend_inst.build(
-                model_path=model,
-                target=target,
-                quantize=quantize,
+            # ---------------------------------------------------------
+            # Mirror CoreML pipeline: collect env, hash, convert, promote
+            # ---------------------------------------------------------
+            env_data = collect_environment()
+            env_fingerprint = hash_environment(env_data)
+
+            source_hash = compute_source_hash(model)
+
+            config = {
+                "target": target,
+                "quantization": {"type": quantize},
+                "optimizer": {},
+            }
+            config_hash = compute_config_hash(config)
+
+            console.print(f"\n[bold]Building:[/bold] {Path(model).name}")
+            console.print(f"Backend: {backend}")
+            console.print(f"Target: {target}")
+            console.print(f"Quantization: {quantize}\n")
+
+            # Generate representative dataset for INT8 calibration
+            representative_dataset = None
+            if quantize == "int8":
+                console.print("[dim]Generating INT8 calibration data...[/dim]")
+                import onnx
+                import numpy as np
+                onnx_model = onnx.load(str(model))
+                input_shapes = backend_inst._get_input_shapes(onnx_model)
+                def _make_representative_dataset(shapes):
+                    def generator():
+                        for _ in range(100):
+                            yield [np.random.randn(*shape).astype(np.float32) for _, shape in shapes]
+                    return generator
+                representative_dataset = _make_representative_dataset(input_shapes)
+
+            with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
+                task = p.add_task(f"Converting to TFLite ({quantize.upper()})...", total=None)
+                tflite_path = backend_inst._export(
+                    model_path=Path(model),
+                    quantize=quantize,
+                    name=name,
+                    representative_dataset=representative_dataset,
+                )
+                p.update(task, completed=True)
+
+            artifact_hash = compute_source_hash(tflite_path)
+
+            build_id = _structured_build_id(
+                source_hash,
+                config_hash,
+                artifact_hash,
+                env_fingerprint,
+                MLBUILD_VERSION,
+            )
+
+            # Promote artifact into content-addressed directory
+            artifacts_root = Path(".mlbuild/artifacts").resolve()
+            final_path = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
+            artifacts_root.mkdir(parents=True, exist_ok=True)
+
+            if not final_path.exists():
+                shutil.copy2(str(tflite_path), str(final_path))
+
+            size_mb = Decimal(str(round(final_path.stat().st_size / (1024 * 1024), 6)))
+
+            backend_versions = {"tflite": backend_inst._tf_version()}
+            if "onnx2tf" in sys.modules:
+                import onnx2tf
+                backend_versions["onnx2tf"] = onnx2tf.__version__
+
+            build_obj = Build(
+                build_id=build_id,
+                artifact_hash=artifact_hash,
+                source_hash=source_hash,
+                config_hash=config_hash,
+                env_fingerprint=env_fingerprint,
                 name=name,
                 notes=notes,
+                created_at=datetime.now(timezone.utc),
+                source_path=str(Path(model).resolve()),
+                target_device=target,
+                format=backend,
+                quantization=config["quantization"],
+                optimizer_config=config["optimizer"],
+                backend_versions=backend_versions,
+                environment_data=env_data,
+                mlbuild_version=MLBUILD_VERSION,
+                python_version=env_data["python"]["version"],
+                platform=env_data["hardware"]["cpu"]["system"],
+                os_version=env_data["hardware"]["cpu"]["release"],
+                artifact_path=str(final_path),
+                size_mb=size_mb,
             )
+
+            # Registry transaction
+            registry = LocalRegistry()
+            try:
+                registry.save_build(build_obj)
+            except Exception:
+                pass  # Duplicate build — already registered, artifact still valid
+
+            console.print(f"\n[bold green]✓ Build complete[/bold green]")
+            console.print(f"Build ID:      {build_id[:16]}...")
+            console.print(f"Artifact Hash: {artifact_hash[:16]}...")
+            console.print(f"Source Hash:   {source_hash[:16]}...")
+            console.print(f"Config Hash:   {config_hash[:16]}...")
+            console.print(f"Env Fingerprint: {env_fingerprint[:16]}...")
+            console.print(f"Size:          {size_mb:.2f} MB")
+            console.print(f"Artifact Path: {final_path}", overflow="fold")
+            console.print()
             return
+
+        except MLBuildError as e:
+            console.print("\n[bold red]Build failed[/bold red]\n")
+            console.print(e.format())
+            sys.exit(e.exit_code.value)
         except Exception as e:
             console.print(f"\n[bold red]Build failed[/bold red]: {e}\n")
             import traceback

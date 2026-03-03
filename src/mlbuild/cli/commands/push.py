@@ -143,11 +143,11 @@ class PushService:
 
             metadata = {
                 "build_id": build.build_id,
-                "artifact_hash": checksum, 
-                "source_hash": "0" * 64,   
-                "config_hash": "0" * 64,    
-                "env_fingerprint": "0" * 64,  
-                "size_bytes": size,
+                "artifact_hash": getattr(build, "artifact_hash", checksum),
+                "source_hash": getattr(build, "source_hash", "0" * 64),
+                "config_hash": getattr(build, "config_hash", "0" * 64),
+                "env_fingerprint": getattr(build, "env_fingerprint", "0" * 64),
+                "size_bytes": getattr(build, "size_bytes", size),
                 "name": build.name,
                 "target_device": build.target_device,
                 "format": build.format,

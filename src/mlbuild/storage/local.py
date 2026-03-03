@@ -338,9 +338,21 @@ class LocalMetadataBackend:
             raise StorageError(f"Metadata directory not accessible")
 
     def iter_builds(self):
-        """Iterate builds in pages for sync."""
-        build_ids, _ = self.list_builds(limit=1000)
-        yield [{"build_id": bid, "hash": "0"*64} for bid in build_ids]
+        import json
+        if not self.metadata_dir.exists():
+            return
+        metadata_files = sorted(self.metadata_dir.glob("*.json"))
+        batch = []
+        for meta_path in metadata_files:
+            try:
+                meta = json.loads(meta_path.read_text())
+                batch.append({
+                    "build_id": meta.get("build_id", meta_path.stem),
+                    "hash": meta.get("artifact_hash", "0" * 64),
+                })
+            except Exception:
+                batch.append({"build_id": meta_path.stem, "hash": "0" * 64})
+        yield batch
     
 # ============================================================
 # Combined Backend
