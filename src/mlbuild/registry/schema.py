@@ -1,5 +1,5 @@
 """
-Enterprise-grade SQLite schema for MLBuild registry (v4).
+SQLite schema for MLBuild registry (v5).
 
 Invariants:
 - artifact_hash = SHA256 of normalized CoreML artifact
@@ -11,11 +11,15 @@ Invariants:
 All timestamps are ISO8601 UTC (e.g., 2026-02-14T03:42:11Z).
 All JSON fields must be canonical and json_valid().
 Builds are soft-deletable (deleted_at).
+
+v5 changes:
+- Added `imported` INTEGER NOT NULL DEFAULT 0 to builds table
+  Populated from backend_versions JSON for existing rows on migration.
 """
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -30,9 +34,9 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TEXT NOT NULL
 );
 
--- Insert schema version v3 (ignore if exists)
+-- Insert schema version v5 (ignore if exists)
 INSERT OR IGNORE INTO schema_version (id, version, applied_at)
-VALUES (1, 4, datetime('now'));
+VALUES (1, 5, datetime('now'));
 
 
 -- ============================================================
@@ -71,7 +75,11 @@ CREATE TABLE IF NOT EXISTS builds (
     os_version      TEXT NOT NULL,
 
     artifact_path TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+
+    -- v5: explicit imported flag.
+    -- 1 = registered via mlbuild import, 0 = produced by mlbuild build.
+    imported INTEGER NOT NULL DEFAULT 0 CHECK (imported IN (0, 1))
 );
 
 -- Active-build uniqueness only (allows recreation after soft delete)
@@ -217,6 +225,9 @@ CREATE INDEX IF NOT EXISTS idx_builds_source_hash
 CREATE INDEX IF NOT EXISTS idx_builds_artifact_hash
     ON builds(artifact_hash);
 
+CREATE INDEX IF NOT EXISTS idx_builds_imported
+    ON builds(imported);
+
 CREATE INDEX IF NOT EXISTS idx_benchmarks_build
     ON benchmarks(build_id);
 
@@ -228,4 +239,26 @@ CREATE INDEX IF NOT EXISTS idx_benchmarks_measured
 
 CREATE INDEX IF NOT EXISTS idx_tags_build
     ON tags(build_id);
+"""
+
+
+# ============================================================
+# Migration: v4 → v5
+# ============================================================
+
+MIGRATION_V4_TO_V5 = """
+-- Add imported column (safe to run multiple times due to IF NOT EXISTS guard
+-- handled in Python before execution).
+ALTER TABLE builds ADD COLUMN imported INTEGER NOT NULL DEFAULT 0
+    CHECK (imported IN (0, 1));
+
+-- Back-fill: mark any row whose backend_versions JSON contains
+-- "imported":"true" as imported=1.
+UPDATE builds
+SET imported = 1
+WHERE json_extract(backend_versions, '$.imported') = 'true';
+
+-- Bump schema version
+UPDATE schema_version SET version = 5, applied_at = datetime('now')
+WHERE id = 1;
 """

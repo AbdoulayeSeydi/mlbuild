@@ -1,5 +1,5 @@
 """
-MLBuild Doctor Command (Enterprise-Grade)
+MLBuild Doctor Command
 
 Performs a comprehensive check of the MLBuild environment:
 - Python version

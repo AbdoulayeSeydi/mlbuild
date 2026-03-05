@@ -1,5 +1,5 @@
 """
-Enterprise-grade environment fingerprinting for ML reproducibility.
+Environment fingerprinting for ML reproducibility.
 
 Design goals:
 - Explicit entropy capture (if it affects numerics, we fingerprint it)

@@ -1,5 +1,5 @@
 """
-Production-grade calibration dataset management for INT8 quantization.
+Calibration dataset management for INT8 quantization.
 
 Design goals:
 - Strict determinism (no global RNG mutation)

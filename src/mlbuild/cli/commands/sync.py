@@ -1,5 +1,5 @@
 """
-Enterprise-grade bidirectional sync command.
+Bidirectional sync command.
 
 Guarantees:
 - Backend abstraction (no direct instantiation)

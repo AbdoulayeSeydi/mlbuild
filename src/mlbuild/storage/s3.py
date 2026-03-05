@@ -1,5 +1,5 @@
 """
-Production-grade S3 Storage Backend for MLBuild
+S3 Storage Backend for MLBuild
 
 Features:
 - Streaming uploads/downloads (avoids large temp files)

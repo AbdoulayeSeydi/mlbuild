@@ -21,7 +21,7 @@ MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&
 
 | Feature | Status |
 |---------|--------|
-| Input formats | ONNX, TFLite |
+| Input formats | ONNX, TFLite, CoreML |
 | Backends | CoreML, TFLite, ONNX Runtime |
 | Storage | Local + S3-compatible (AWS S3, R2, B2) |
 | Targets | Apple Silicon, A-series, Android (arm64) |
@@ -79,6 +79,7 @@ Catch latency AND size regressions before they reach production.
 | Performance reports | No | `mlbuild report` |
 | S3-compatible remote storage | No | Built-in |
 | TFLite benchmarking | No | Built-in |
+| Import pre-built models | No | `mlbuild import` |
 
 MLBuild complements your existing stack — it doesn't replace it.
 
@@ -108,6 +109,10 @@ pip install "mlbuild[s3]"
 ```bash
 # 1. Build and convert model
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16
+
+# 1b. Or import a pre-built model
+mlbuild import --model model.tflite --target android_arm64
+mlbuild import --model model.mlpackage --target apple_m1 --quantize fp16
 
 # 2. Benchmark (automatic p50/p95/p99)
 mlbuild benchmark <build-id>
@@ -160,6 +165,41 @@ See `.github/workflows/examples/` for complete examples.
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16 --name "v2.0"
 mlbuild build --model model.onnx --target android_arm64 --quantize int8
 ```
+
+#### Import Pre-built Models
+
+Register an existing TFLite or CoreML model directly — no conversion required. Once imported, all MLBuild commands (benchmark, profile, compare, report, ci-check) work on it immediately.
+
+```bash
+# Import a TFLite model
+mlbuild import --model model.tflite --target android_arm64
+
+# Import a CoreML model
+mlbuild import --model model.mlpackage --target apple_m1
+
+# Import with metadata
+mlbuild import --model model.tflite --target android_arm64 \
+  --quantize int8 \
+  --name "vendor-v2" \
+  --notes "Supplied by vendor, int8 quantized"
+
+# JSON output (for CI pipelines)
+mlbuild import --model model.tflite --target android_arm64 --json
+```
+
+**Supported formats:**
+- `.tflite` — validated via FlatBuffer magic bytes (TFL3/TFL2)
+- `.mlpackage` — validated via Manifest.json + Data/ structure
+- `.mlmodel` — legacy CoreML flat file
+
+**Format/target compatibility:**
+
+| Format | Valid Targets |
+|--------|--------------|
+| `tflite` | `android_arm64`, `android_arm32`, `android_x86`, `raspberry_pi`, `coral_tpu`, `generic_linux` |
+| `coreml` | `apple_m1`, `apple_m2`, `apple_m3`, `apple_a15`, `apple_a16`, `apple_a17` |
+
+Imported builds are marked `[imported]` in `mlbuild log` output and tracked with `"imported": true` in their metadata, distinguishing them from builds produced by `mlbuild build`.
 
 #### Benchmark
 
@@ -402,7 +442,8 @@ Training Phase
 
 Production Phase
 ├── Model Building:         MLBuild build
-├── Performance Validation: MLBuild ci-check     ← regression gate
+├── Model Importing:        MLBuild import      ← pre-built TFLite / CoreML
+├── Performance Validation: MLBuild ci-check    ← regression gate
 ├── Quantization Analysis:  MLBuild compare-quantization
 ├── Reporting:              MLBuild report
 └── Deployment:             GitHub Actions / K8s
@@ -455,6 +496,13 @@ score = (size_reduction% + latency_improvement%) / 2 - accuracy_loss% * 2
 - Quantization: FP32 / FP16 / INT8
 - Deterministic builds (content-addressed)
 
+### Import Pre-built Models
+- Import existing `.tflite`, `.mlmodel`, `.mlpackage` files directly
+- Format validation via magic bytes (TFLite) and structure checks (CoreML)
+- Format/target compatibility enforcement
+- Imported builds tracked with `[imported]` badge in `mlbuild log`
+- Full MLBuild toolchain available immediately after import
+
 ### Performance Validation
 - Automated p50/p95/p99 benchmarking
 - SLA enforcement (`--max-latency`, `--max-memory`)
@@ -500,24 +548,48 @@ mlbuild/
 ├── src/mlbuild/
 │   ├── cli/
 │   │   ├── commands/
-│   │   │   ├── benchmark.py           # mlbuild benchmark
-│   │   │   ├── compare.py             # mlbuild compare + ci-check
-│   │   │   ├── compare_quantization.py # mlbuild compare-quantization
-│   │   │   ├── report.py              # mlbuild report
-│   │   │   ├── profile.py             # mlbuild profile
-│   │   │   ├── validate.py            # mlbuild validate
-│   │   │   ├── push.py / pull.py      # remote storage
-│   │   │   └── ...
-│   │   └── main.py                    # CLI entry point
+│   │   │   ├── benchmark.py              # mlbuild benchmark
+│   │   │   ├── build.py                  # mlbuild build
+│   │   │   ├── compare.py                # mlbuild compare + ci-check
+│   │   │   ├── compare_compute_units.py  # mlbuild compare-compute-units
+│   │   │   ├── compare_quantization.py   # mlbuild compare-quantization
+│   │   │   ├── diff.py                   # mlbuild diff
+│   │   │   ├── doctor.py                 # mlbuild doctor
+│   │   │   ├── experiment.py             # mlbuild experiment
+│   │   │   ├── import_cmd.py             # mlbuild import
+│   │   │   ├── log.py                    # mlbuild log
+│   │   │   ├── profile.py                # mlbuild profile
+│   │   │   ├── pull.py                   # mlbuild pull
+│   │   │   ├── push.py                   # mlbuild push
+│   │   │   ├── remote.py                 # mlbuild remote
+│   │   │   ├── report.py                 # mlbuild report
+│   │   │   ├── run.py                    # mlbuild run
+│   │   │   ├── sync.py                   # mlbuild sync
+│   │   │   ├── tag.py                    # mlbuild tag
+│   │   │   └── validate.py               # mlbuild validate
+│   │   └── main.py                       # CLI entry point
 │   ├── backends/
-│   │   ├── coreml/                    # CoreML exporter + deep profiler
-│   │   ├── tflite/                    # TFLite backend + deep profiler
-│   │   └── onnxruntime/               # ONNX Runtime backend
-│   ├── benchmark/                     # Benchmark runner + stats
-│   ├── profiling/                     # Layer-by-layer profiling + cold start
-│   ├── registry/                      # SQLite registry (WAL mode)
-│   ├── storage/                       # S3-compatible remote storage
-│   └── experiments/                   # Experiment + run tracking
+│   │   ├── base.py                       # Backend base class
+│   │   ├── registry.py                   # Backend auto-discovery
+│   │   ├── coreml/                       # CoreML exporter + deep profiler
+│   │   ├── tflite/                       # TFLite backend + deep profiler
+│   │   └── onnxruntime/                  # ONNX Runtime backend
+│   ├── benchmark/                        # Benchmark runner + stats
+│   ├── core/
+│   │   ├── environment.py                # Environment fingerprinting
+│   │   ├── errors.py                     # Error types
+│   │   ├── format_detection.py           # Format detection + target validation
+│   │   ├── hash.py                       # Deterministic artifact hashing
+│   │   ├── types.py                      # Core data types (Build, Benchmark)
+│   │   └── ...
+│   ├── experiments/                      # Experiment + run tracking
+│   ├── loaders/                          # ONNX model loading
+│   ├── profiling/                        # Layer-by-layer profiling + cold start
+│   ├── registry/
+│   │   ├── local.py                      # SQLite registry (WAL mode)
+│   │   └── schema.py                     # Schema + migrations (v5)
+│   ├── storage/                          # S3-compatible remote storage
+│   └── visualization/                    # Chart generation
 ├── tests/
 ├── pyproject.toml
 └── README.md
@@ -536,6 +608,7 @@ mlbuild/
 | Size regression detection | No | No | No | **Built-in** |
 | Quantization analysis | No | No | No | **Built-in** |
 | Per-layer deep profiling | No | No | No | **Built-in** |
+| Import pre-built models | No | No | No | **Built-in** |
 | Performance reports | No | No | Dashboard | **HTML/PDF** |
 
 Use MLflow/W&B for training. Use MLBuild for inference.

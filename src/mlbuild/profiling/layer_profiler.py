@@ -1,5 +1,5 @@
 """
-CoreML cumulative layer profiler (production grade).
+CoreML cumulative layer profiler.
 
 Implements:
 

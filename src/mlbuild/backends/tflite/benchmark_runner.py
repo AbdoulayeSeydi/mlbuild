@@ -1,5 +1,5 @@
 """
-Enterprise-Grade TFLite Benchmark Runner
+TFLite Benchmark Runner
 
 Features:
 - Multi-input model support

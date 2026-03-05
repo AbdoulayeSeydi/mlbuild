@@ -1,5 +1,5 @@
 """
-Enterprise-grade push command.
+Push command.
 
 Transactional, CAS-aware, policy-enforcing, retry-safe.
 """

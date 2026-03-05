@@ -1,5 +1,5 @@
 """
-Deterministic artifact hashing for CoreML models (enterprise-grade).
+Deterministic artifact hashing for CoreML model.
 
 Goals:
 - Fully deterministic SHA256 for same model config.

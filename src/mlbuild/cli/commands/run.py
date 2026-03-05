@@ -1,5 +1,5 @@
 """
-Enterprise-grade run tracking CLI.
+Run tracking CLI.
 """
 
 from __future__ import annotations

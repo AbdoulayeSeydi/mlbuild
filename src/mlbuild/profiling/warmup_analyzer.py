@@ -1,5 +1,5 @@
 """
-Enterprise-grade Warmup & Stability Analyzer for CoreML models.
+Warmup & Stability Analyzer for CoreML models.
 
 Features:
 - Cold-start isolation (model load vs first inference vs warm state)

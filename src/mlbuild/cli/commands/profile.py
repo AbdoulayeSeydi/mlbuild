@@ -1,5 +1,5 @@
 """
-Profile command — Production-grade model profiling.
+Profile command — model profiling.
 
 CoreML NeuralNetwork : Per-layer cumulative timing
 CoreML MLProgram     : Full-model timing + op breakdown

@@ -1,5 +1,5 @@
 """
-Enterprise-grade IR schema validation engine.
+IR schema validation engine.
 
 Architecture:
 - Structured validation issues (no string parsing)

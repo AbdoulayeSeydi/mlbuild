@@ -1,5 +1,5 @@
 """
-Enterprise-grade remote storage configuration system.
+Remote storage configuration system.
 
 Design goals:
 - Strong typing

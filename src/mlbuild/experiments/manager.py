@@ -1,5 +1,5 @@
 """
-Enterprise-grade experiment tracking manager.
+Experiment tracking manager.
 Self-contained: no external exception module required.
 """
 

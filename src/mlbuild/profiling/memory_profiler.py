@@ -3,25 +3,12 @@ BasicMemoryProfiler — Week 1 implementation.
 
 Captures memory behavior during model inference via background sampling thread.
 
-What this measures (Week 1):
+Features:
   - Baseline RSS before any inference
   - Peak RSS during inference (sampled at 2ms intervals)
   - Final RSS after inference
   - Peak delta (spike above baseline)
   - Python heap delta via tracemalloc
-
-What this does NOT measure yet (Week 3):
-  - True VM pressure (mach_task_basic_info)
-  - GPU/ANE driver memory
-  - Per-layer memory peaks
-
-Why RSS sampling beats before/after:
-  - Before/after only captures the delta at endpoints
-  - Peak RSS during inference can be 2-5x the stable footprint
-  - Especially true for CoreML where ANE driver allocates/frees mid-inference
-  - 2ms polling interval catches most spikes for models > 5ms latency
-    (for sub-ms models like ANE fp16, spikes are driver-internal and
-     require mach_task_basic_info — that's Week 3)
 
 Usage:
     with BasicMemoryProfiler() as mem:

@@ -1,5 +1,5 @@
 """
-TFLiteDeepProfiler — Production-grade per-layer profiling for TFLite models.
+TFLiteDeepProfiler —  per-layer profiling for TFLite models.
 
 Six capabilities (all run on macOS, no device or Xcode required):
 

@@ -1,5 +1,5 @@
 """
-Enterprise-grade local SQLite registry for MLBuild.
+Local SQLite registry for MLBuild.
 
 Stored at: .mlbuild/registry.db
 
@@ -47,6 +47,11 @@ def _canonical_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
+def _is_imported(build: Build) -> int:
+    """Return 1 if this build was registered via mlbuild import, 0 otherwise."""
+    return 1 if build.backend_versions.get("imported") == "true" else 0
+
+
 # ------------------------------------------------------------
 # Registry
 # ------------------------------------------------------------
@@ -79,7 +84,7 @@ class LocalRegistry:
 
     def init_schema(self) -> None:
         """Initialize database schema. Called only by 'mlbuild init'."""
-        from .schema import SCHEMA_VERSION
+        from .schema import SCHEMA_VERSION, MIGRATION_V4_TO_V5
 
         with self._connect() as conn:
             # Check if schema_version table exists
@@ -89,14 +94,31 @@ class LocalRegistry:
             schema_table_exists = cursor.fetchone() is not None
 
             if schema_table_exists:
-                # Database exists - check version
                 cursor = conn.execute("SELECT version FROM schema_version WHERE id = 1")
                 row = cursor.fetchone()
 
                 if row:
                     db_version = row[0]
 
-                    if db_version < SCHEMA_VERSION:
+                    # ── v4 → v5 migration ──────────────────────────────
+                    if db_version == 4:
+                        logger.info("Migrating schema v4 → v5 (adding imported column)...")
+                        col_exists = conn.execute(
+                            "SELECT COUNT(*) FROM pragma_table_info('builds') "
+                            "WHERE name = 'imported'"
+                        ).fetchone()[0]
+
+                        if not col_exists:
+                            conn.executescript(MIGRATION_V4_TO_V5)
+                        else:
+                            conn.execute(
+                                "UPDATE schema_version SET version = 5, "
+                                "applied_at = datetime('now') WHERE id = 1"
+                            )
+                        logger.info("Migration v4 → v5 complete.")
+                        return
+
+                    elif db_version < SCHEMA_VERSION:
                         raise InternalError(
                             f"Database schema v{db_version} is outdated. "
                             f"Expected v{SCHEMA_VERSION}. "
@@ -108,7 +130,7 @@ class LocalRegistry:
                             f"Upgrade MLBuild."
                         )
 
-            # Create or update schema
+            # Fresh install — create full schema
             try:
                 conn.executescript(SCHEMA_SQL)
             except sqlite3.OperationalError as e:
@@ -220,6 +242,7 @@ class LocalRegistry:
                     build.os_version,
                     build.artifact_path,
                     int(build.size_mb * 1024 * 1024),
+                    _is_imported(build),  # v5: explicit imported flag
                 )
                 
                 logger.info(f"Inserting {len(values)} values into builds table")
@@ -247,8 +270,9 @@ class LocalRegistry:
                         platform,
                         os_version,
                         artifact_path,
-                        size_bytes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        size_bytes,
+                        imported
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values,
                 )
@@ -528,6 +552,19 @@ class LocalRegistry:
             except (KeyError, IndexError):
                 return default
         
+        # v5: read imported flag from column, fall back to JSON for
+        # any rows that predate the migration running.
+        raw_imported = safe_get(row, "imported", None)
+        if raw_imported is None:
+            backend_versions = json.loads(safe_get(row, "backend_versions", "{}"))
+            imported_flag = "true" if backend_versions.get("imported") == "true" else "false"
+        else:
+            imported_flag = "true" if raw_imported == 1 else "false"
+
+        backend_versions = json.loads(row["backend_versions"])
+        # Keep backend_versions consistent with the imported flag
+        backend_versions["imported"] = imported_flag
+
         return Build(
             build_id=row["build_id"],
             artifact_hash=row["artifact_hash"],
@@ -542,7 +579,7 @@ class LocalRegistry:
             format=row["format"],
             quantization=json.loads(row["quantization"]),
             optimizer_config=json.loads(row["optimizer_config"]),
-            backend_versions=json.loads(row["backend_versions"]),
+            backend_versions=backend_versions,
             environment_data=json.loads(safe_get(row, "environment_data", "{}")),
             mlbuild_version=row["mlbuild_version"],
             python_version=row["python_version"],

@@ -1,6 +1,6 @@
 """
 TensorFlow Lite Backend for MLBuild
-Enterprise-grade TFLite backend for mobile and edge deployment.
+TFLite backend for mobile and edge deployment.
 """
 
 from __future__ import annotations

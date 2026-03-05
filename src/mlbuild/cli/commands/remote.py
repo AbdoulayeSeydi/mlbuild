@@ -1,5 +1,5 @@
 """
-Remote storage management commands (enterprise-grade).
+Remote storage management commands.
 """
 
 from __future__ import annotations

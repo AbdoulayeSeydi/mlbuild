@@ -1,5 +1,5 @@
 """
-Enterprise-grade log command: Display build history.
+Log command: Display build history.
 
 Features:
 - Soft-delete awareness
@@ -78,6 +78,11 @@ def safe_hash(value: Optional[str], full: bool) -> str:
     return value if full else value[:16] + "..."
 
 
+def is_imported(build: "Build") -> bool:
+    """Return True if this build was registered via mlbuild import."""
+    return build.backend_versions.get("imported") == "true"
+
+
 # -------------------------
 # CLI
 # -------------------------
@@ -147,11 +152,13 @@ def log(
             if as_json:
                 data = build.to_public_dict(include_hashes=True)
                 data["created_at"] = format_iso8601(data["created_at"])
+                data["imported"] = is_imported(build)
                 console.print(json.dumps(data, indent=2, sort_keys=True))
                 sys.exit(0)
             
             # Rich detailed view
-            console.print(f"\n[bold cyan]{build.name or 'Unnamed Build'}[/bold cyan]")
+            imported_badge = " [bold yellow]\[imported][/bold yellow]" if is_imported(build) else ""
+            console.print(f"\n[bold cyan]{build.name or 'Unnamed Build'}[/bold cyan]{imported_badge}")
             console.print(f"[dim]Created: {format_iso8601(build.created_at)}[/dim]\n")
             
             console.print("[bold]Identifiers:[/bold]")
@@ -218,6 +225,7 @@ def log(
             for b in builds:
                 data = b.to_public_dict(include_hashes=show_hashes)
                 data["created_at"] = format_iso8601(data["created_at"])
+                data["imported"] = is_imported(b)
                 output.append(data)
 
             console.print(json.dumps(output, indent=2, sort_keys=True))
@@ -242,6 +250,7 @@ def log(
                 "format",
                 "size_bytes",
                 "created_at",
+                "imported",
             ]
 
             if show_hashes:
@@ -259,6 +268,7 @@ def log(
                     data["format"],
                     data["size_bytes"],
                     format_iso8601(data["created_at"]),
+                    is_imported(b),
                 ]
 
                 if show_hashes:
@@ -297,9 +307,14 @@ def log(
         for b in builds:
             data = b.to_public_dict(include_hashes=show_hashes)
 
+            # Append [imported] badge to name for imported builds
+            display_name = data["name"] or "(unnamed)"
+            if is_imported(b):
+                display_name = f"{display_name} [yellow]\[imported][/yellow]"
+
             row = [
                 data["build_id"] if full_id else data["build_id"][:16] + "...",
-                data["name"] or "(unnamed)",
+                display_name,
                 data["target_device"],
                 humanize_bytes(data["size_bytes"]),
                 format_iso8601(data["created_at"]),

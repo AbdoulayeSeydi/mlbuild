@@ -1,5 +1,5 @@
 """
-Enterprise-grade terminal visualization for benchmarking.
+Terminal visualization for benchmarking.
 
 Features:
 - Deterministic layout (CI-safe)

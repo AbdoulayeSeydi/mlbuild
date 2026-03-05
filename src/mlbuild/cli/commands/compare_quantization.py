@@ -1,5 +1,5 @@
 """
-Production-grade quantization comparison.
+Quantization comparison.
 
 Compares FP32 / FP16 / INT8 builds with:
 - Deterministic baseline selection

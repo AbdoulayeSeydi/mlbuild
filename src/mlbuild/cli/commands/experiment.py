@@ -1,5 +1,5 @@
 """
-Enterprise-grade experiment management CLI.
+Experiment management CLI.
 """
 
 from __future__ import annotations

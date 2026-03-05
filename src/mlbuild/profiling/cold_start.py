@@ -1,5 +1,5 @@
 """
-ColdStartProfiler — Enterprise-grade cold start analysis for CoreML and TFLite.
+ColdStartProfiler —  Cold start analysis for CoreML and TFLite.
 
 Features:
 - CV-based stable window detection (authoritative)

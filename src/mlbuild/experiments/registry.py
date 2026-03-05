@@ -1,5 +1,5 @@
 """
-Enterprise-grade SQLite-backed registry.
+SQLite-backed registry.
 
 Production hardened:
 - Explicit transaction control

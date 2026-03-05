@@ -1,6 +1,6 @@
 """
 Experiment and Run domain models.
-Enterprise-grade lifecycle-enforced experiment tracking.
+Lifecycle-enforced experiment tracking.
 """
 
 from __future__ import annotations

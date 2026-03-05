@@ -1,5 +1,5 @@
 """
-Production-Grade ONNX → TFLite Conversion Pipeline
+ONNX → TFLite Conversion Pipeline
 
 Conversion Flow:
 1. ONNX → TFLite (via onnx2tf, direct conversion)

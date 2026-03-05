@@ -1,5 +1,5 @@
 """
-Production-grade diff command for Edge ML builds.
+Diff command for Edge ML builds.
 Deterministic, canonical, CI-safe.
 """
 

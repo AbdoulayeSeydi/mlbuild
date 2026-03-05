@@ -1,5 +1,5 @@
 """
-Refactor AI – Canonical Intermediate Representation (IR)
+Canonical Intermediate Representation (IR)
 
 This IR is:
 - Format-agnostic (ONNX is just one frontend)
