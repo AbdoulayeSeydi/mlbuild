@@ -6,6 +6,8 @@
 
 **Performance CI/CD for Production ML Models**
 
+[![MLBuild Demo](https://img.youtube.com/vi/Of82sCF4Bhk/maxresdefault.jpg)](https://www.youtube.com/watch?v=Of82sCF4Bhk)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI version](https://img.shields.io/pypi/v/mlbuild.svg)](https://pypi.org/project/MLBuild/)
