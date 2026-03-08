@@ -47,6 +47,10 @@ from ...registry import LocalRegistry
 from ...core.types import Build
 from ...core.errors import MLBuildError
 
+# --- PATCH: task detection + validation config ---
+from ...core.task_detection import detect_task, detection_warning, ModelInfo, TaskType
+from ...core.task_validation import StrictOutputConfig
+
 console = Console()
 
 
@@ -79,6 +83,20 @@ def _structured_build_id(
 
 def _directory_size_bytes(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _read_global_strict() -> bool:
+    """Read [validation] strict_output from .mlbuild/config.toml if present."""
+    try:
+        config_path = Path(".mlbuild/config.toml")
+        if not config_path.exists():
+            return False
+        import tomllib  # Python 3.11+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        return bool(data.get("validation", {}).get("strict_output", False))
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------
@@ -136,7 +154,29 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
     default="fp32",
 )
 @click.option("--notes")
-def build(model: Path, backend: str, target: str, name: str, quantize: str, notes: str):
+# --- PATCH: --task flag ---
+@click.option(
+    "--task",
+    type=click.Choice(["vision", "nlp", "audio", "unknown"]),
+    default=None,
+    help="Model task type. Auto-detected from ONNX graph if omitted.",
+)
+# --- PATCH: --strict-output flag ---
+@click.option(
+    "--strict-output",
+    "strict_output",
+    is_flag=True,
+    default=False,
+    help="Hard-fail on output validation warnings (overrides config.toml).",
+)
+def build(model: Path, backend: str, target: str, name: str, quantize: str, notes: str,
+          task: str, strict_output: bool):
+
+    # --- PATCH: resolve StrictOutputConfig once, used downstream ---
+    strict_cfg = StrictOutputConfig.from_command(
+        strict_flag=strict_output,
+        global_strict=_read_global_strict(),
+    )
 
     # ============================================================
     # RESOLVE BACKEND
@@ -188,14 +228,14 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 representative_dataset = _make_representative_dataset(input_shapes)
 
             with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-                task = p.add_task(f"Converting to TFLite ({quantize.upper()})...", total=None)
+                task_progress = p.add_task(f"Converting to TFLite ({quantize.upper()})...", total=None)
                 tflite_path = backend_inst._export(
                     model_path=Path(model),
                     quantize=quantize,
                     name=name,
                     representative_dataset=representative_dataset,
                 )
-                p.update(task, completed=True)
+                p.update(task_progress, completed=True)
 
             artifact_hash = compute_source_hash(tflite_path)
 
@@ -222,6 +262,14 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 import onnx2tf
                 backend_versions["onnx2tf"] = onnx2tf.__version__
 
+            # --- PATCH: task detection for TFLite (Tier 2/3 only — no ONNX graph) ---
+            import onnx
+            onnx_model = onnx.load(str(model))
+            task_info = _detect_task_from_onnx(onnx_model, forced_task=task)
+            warn = detection_warning(task_info)
+            if warn:
+                console.print(f"\n[yellow]{warn}[/yellow]")
+
             build_obj = Build(
                 build_id=build_id,
                 artifact_hash=artifact_hash,
@@ -244,6 +292,7 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 os_version=env_data["hardware"]["cpu"]["release"],
                 artifact_path=str(final_path),
                 size_mb=size_mb,
+                task_type=task_info.primary.value,  # --- PATCH ---
             )
 
             # Registry transaction
@@ -261,6 +310,7 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
             console.print(f"Env Fingerprint: {env_fingerprint[:16]}...")
             console.print(f"Size:          {size_mb:.2f} MB")
             console.print(f"Artifact Path: {final_path}", overflow="fold")
+            console.print(f"Task:          {task_info.primary.value}")
             console.print()
             return
 
@@ -327,9 +377,9 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         # Step 3: Load model
         # -------------------------------------------------------------
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-            task = p.add_task("Loading ONNX...", total=None)
+            task_progress = p.add_task("Loading ONNX...", total=None)
             ir = load_model(str(model))
-            p.update(task, completed=True)
+            p.update(task_progress, completed=True)
 
         # -------------------------------------------------------------
         # Step 4: Hash source
@@ -387,36 +437,40 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
             calibration_data = list(calibration_samples)
 
         # -------------------------------------------------------------
+        # Step 5.6: Task detection from ONNX graph (Tier 1/2/3)
+        # -------------------------------------------------------------
+        import onnx as _onnx
+        _onnx_model = _onnx.load(str(model))
+        task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
+        warn = detection_warning(task_result)
+        if warn:
+            console.print(f"[yellow]{warn}[/yellow]\n")
+
+        # -------------------------------------------------------------
         # Step 6: Convert to CoreML
         # -------------------------------------------------------------
         with tempfile.TemporaryDirectory() as tmp_root:
 
             tmp_root = Path(tmp_root)
 
+            import io
+            import contextlib
+
             with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-                task = p.add_task("Converting to CoreML...", total=None)
+                task_progress = p.add_task("Converting to CoreML...", total=None)
 
                 exporter = CoreMLExporter(target=target)
-                mlpackage_path, conversion_metadata = exporter.export(
-                    ir,
-                    output_dir=tmp_root,
-                    quantization=quantize,
-                    calibration_data=calibration_data,
-                )
+                
+                # Suppress all noisy output from coremltools/onnx2torch during conversion
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    mlpackage_path, conversion_metadata = exporter.export(
+                        ir,
+                        output_dir=tmp_root,
+                        quantization=quantize,
+                        calibration_data=calibration_data,
+                    )
 
-                # Log the conversion metadata
-                console.print(f"\n[dim]Conversion metadata:[/dim]")
-                if "onnx_opset" in conversion_metadata:
-                    console.print(f"  ONNX Opset: {conversion_metadata['onnx_opset']}")
-                if "ir_version" in conversion_metadata:
-                    console.print(f"  IR Version: {conversion_metadata['ir_version']}")
-                if "graph_nodes_before" in conversion_metadata:
-                    console.print(f"  Graph nodes: {conversion_metadata['graph_nodes_before']} → {conversion_metadata.get('graph_nodes_after', '?')}")
-                if conversion_metadata.get("dynamic_dimensions"):
-                    console.print(f"  Dynamic dims: {len(conversion_metadata['dynamic_dimensions'])} frozen")
-                console.print()
-
-                p.update(task, completed=True)
+                p.update(task_progress, completed=True)
 
             # ---------------------------------------------------------
             # Step 7: Compute artifact hash
@@ -517,6 +571,7 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 os_version=env_data["hardware"]["cpu"]["release"],
                 artifact_path=str(final_dir),
                 size_mb=size_mb,
+                task_type=task_result.primary.value,  # --- PATCH ---
             )
 
             # ---------------------------------------------------------
@@ -541,6 +596,7 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         console.print(f"Env Fingerprint: {env_fingerprint[:16]}...")
         console.print(f"Size:          {size_mb:.2f} MB")
         console.print(f"Artifact Path: {final_dir}")
+        console.print(f"Task:          {task_result.primary.value}")
         console.print()
         
         if not is_reproducible:
@@ -556,3 +612,45 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------
+# Shared helper: build ModelInfo + call detect_task
+# ---------------------------------------------------------------------
+
+def _detect_task_from_onnx(onnx_model, forced_task: str | None):
+    """
+    Build a ModelInfo from a loaded ONNX model and run task detection.
+
+    forced_task : value of --task flag (str) or None for auto-detect.
+    Returns a TaskDetection (arbitration result) from detect_task().
+    """
+    import onnx
+
+    graph = onnx_model.graph
+
+    op_types = list({node.op_type for node in graph.node})
+
+    input_shapes: dict[str, tuple] = {}
+    for inp in graph.input:
+        shape = []
+        for dim in inp.type.tensor_type.shape.dim:
+            shape.append(dim.dim_value if dim.dim_value > 0 else -1)
+        input_shapes[inp.name] = tuple(shape)
+
+    input_names = [inp.name for inp in graph.input]
+
+    metadata: dict[str, str] = {}
+    for prop in onnx_model.metadata_props:
+        metadata[prop.key] = prop.value
+
+    info = ModelInfo(
+        op_types=op_types,
+        input_shapes=input_shapes,
+        input_names=input_names,
+        metadata=metadata,
+        num_nodes=len(graph.node),
+    )
+
+    forced = TaskType(forced_task) if forced_task else None
+    return detect_task(info, forced=forced)

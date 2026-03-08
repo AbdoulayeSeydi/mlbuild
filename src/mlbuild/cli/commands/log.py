@@ -83,6 +83,11 @@ def is_imported(build: "Build") -> bool:
     return build.backend_versions.get("imported") == "true"
 
 
+def display_task(build: "Build") -> str:
+    """Return task_type for display, falling back to 'unknown' for pre-v6 NULL rows."""
+    return getattr(build, "task_type", None) or "unknown"
+
+
 # -------------------------
 # CLI
 # -------------------------
@@ -102,6 +107,12 @@ def is_imported(build: "Build") -> bool:
 @click.option('--tag', default=None)
 @click.option('--date-from', default=None)
 @click.option('--date-to', default=None)
+@click.option(
+    '--task',
+    default=None,
+    type=click.Choice(['vision', 'nlp', 'audio', 'multimodal', 'unknown']),
+    help='Filter builds by task type (e.g. mlbuild log --task vision).',
+)
 def log(
     build_id: Optional[str], 
     limit: int,
@@ -117,6 +128,7 @@ def log(
     tag: Optional[str],
     date_from: Optional[str],
     date_to: Optional[str],
+    task: Optional[str],
 ):
     """
     Enterprise-grade build history inspection.
@@ -126,6 +138,7 @@ def log(
         mlbuild log <build_id>               # Show specific build details
         mlbuild log --limit 20               # Show last 20 builds
         mlbuild log --target apple_m3        # Filter by target
+        mlbuild log --task vision            # Filter by task type
         mlbuild log --json                   # JSON output
         mlbuild log --csv builds.csv         # CSV export
     """
@@ -216,6 +229,14 @@ def log(
             console.print("\n[yellow]No builds found[/yellow]\n")
             sys.exit(0)
 
+        # Apply --task filter (client-side; registry may not support it yet)
+        if task:
+            builds = [b for b in builds if display_task(b) == task]
+
+        if not builds:
+            console.print("\n[yellow]No builds found[/yellow]\n")
+            sys.exit(0)
+
         # -------------------------
         # JSON (deterministic)
         # -------------------------
@@ -226,6 +247,7 @@ def log(
                 data = b.to_public_dict(include_hashes=show_hashes)
                 data["created_at"] = format_iso8601(data["created_at"])
                 data["imported"] = is_imported(b)
+                data["task"] = display_task(b)
                 output.append(data)
 
             console.print(json.dumps(output, indent=2, sort_keys=True))
@@ -248,6 +270,7 @@ def log(
                 "name",
                 "target_device",
                 "format",
+                "task",
                 "size_bytes",
                 "created_at",
                 "imported",
@@ -266,6 +289,7 @@ def log(
                     data["name"] or "",
                     data["target_device"],
                     data["format"],
+                    display_task(b),
                     data["size_bytes"],
                     format_iso8601(data["created_at"]),
                     is_imported(b),
@@ -296,6 +320,7 @@ def log(
         table.add_column("Build ID", style="cyan")
         table.add_column("Name", style="green")
         table.add_column("Target", style="yellow")
+        table.add_column("Task", style="magenta")
         table.add_column("Size", justify="right")
         table.add_column("Created", style="dim")
 
@@ -316,6 +341,7 @@ def log(
                 data["build_id"] if full_id else data["build_id"][:16] + "...",
                 display_name,
                 data["target_device"],
+                display_task(b),
                 humanize_bytes(data["size_bytes"]),
                 format_iso8601(data["created_at"]),
             ]

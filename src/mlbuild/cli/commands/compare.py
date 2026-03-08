@@ -20,6 +20,9 @@ from ...registry import LocalRegistry
 from ...benchmark.runner import detect_regression, CoreMLBenchmarkRunner, ComputeUnit, BenchmarkResult, bootstrap_ci, hardware_fingerprint
 from ...core.errors import MLBuildError
 
+# --- PATCH: task-aware import ---
+from ...core.task_detection import TaskType
+
 import numpy as np
 
 console = Console()
@@ -114,19 +117,151 @@ def _get_size_mb(build) -> float:
         return float(getattr(build, "size_mb", 0) or 0)
 
 
+# --- PATCH: NLP seq-len bucket comparison ---
+
+def _fetch_nlp_buckets(registry, build_id: str) -> dict[int, dict]:
+    """
+    Fetch benchmark rows for a build grouped by seq-len bucket.
+
+    Returns {seq_len: {p50, p95, p99}} from registry benchmark rows.
+    Falls back to empty dict if registry doesn't expose seq_len on rows.
+    """
+    try:
+        rows = registry.get_benchmarks(build_id)  # list of Benchmark objects
+        buckets = {}
+        for row in rows:
+            seq_len = getattr(row, 'seq_len', None)
+            if seq_len is not None:
+                buckets[int(seq_len)] = {
+                    'p50': row.latency_p50_ms,
+                    'p95': row.latency_p95_ms,
+                    'p99': row.latency_p99_ms,
+                }
+        return buckets
+    except Exception:
+        return {}
+
+
+def _run_nlp_comparison(baseline, candidate, latency_threshold, as_json, ci_mode):
+    """
+    Per-seq-len bucket comparison for NLP models.
+    Reads benchmark rows already stored in the registry (written by benchmark.py Step 7).
+    """
+    registry = LocalRegistry()
+    baseline_buckets = _fetch_nlp_buckets(registry, baseline.build_id)
+    candidate_buckets = _fetch_nlp_buckets(registry, candidate.build_id)
+
+    # Union of all seq-lens present in either build, sorted
+    all_seq_lens = sorted(set(baseline_buckets) | set(candidate_buckets))
+
+    if not all_seq_lens:
+        if not as_json and not ci_mode:
+            console.print(
+                "[yellow]No per-seq-len benchmark rows found in registry for these builds.\n"
+                "Run [bold]mlbuild benchmark <build_id> --task nlp[/bold] for both builds first.[/yellow]"
+            )
+        return 0  # not an error — no data to compare
+
+    regression_detected = False
+    rows = []  # (seq_len, b_p50, c_p50, delta_ms, pct, is_regression)
+
+    for seq_len in all_seq_lens:
+        b = baseline_buckets.get(seq_len)
+        c = candidate_buckets.get(seq_len)
+        if b is None or c is None:
+            rows.append((seq_len, None, None, None, None, False))
+            continue
+        delta_ms = c['p50'] - b['p50']
+        pct = _pct_change(b['p50'], c['p50'])
+        is_reg = pct > latency_threshold
+        if is_reg:
+            regression_detected = True
+        rows.append((seq_len, b['p50'], c['p50'], delta_ms, pct, is_reg))
+
+    if as_json:
+        output = {
+            "task": "nlp",
+            "baseline": {"build_id": baseline.build_id, "name": baseline.name},
+            "candidate": {"build_id": candidate.build_id, "name": candidate.name},
+            "seq_len_buckets": [
+                {
+                    "seq_len": seq_len,
+                    "baseline_p50_ms": b_p50,
+                    "candidate_p50_ms": c_p50,
+                    "delta_ms": delta_ms,
+                    "pct_change": pct,
+                    "regression": is_reg,
+                }
+                for seq_len, b_p50, c_p50, delta_ms, pct, is_reg in rows
+            ],
+            "regression_detected": regression_detected,
+            "threshold_pct": latency_threshold,
+        }
+        console.print(json.dumps(output, indent=2))
+        return 1 if regression_detected else 0
+
+    table = Table(title="NLP Comparison (per seq-len)", show_header=True, header_style="bold magenta")
+    table.add_column("Seq Len",       style="cyan",   justify="right")
+    table.add_column("Baseline p50",               justify="right")
+    table.add_column("Candidate p50",              justify="right")
+    table.add_column("Δ",                          justify="right")
+    table.add_column("Regression?",                justify="center")
+
+    for seq_len, b_p50, c_p50, delta_ms, pct, is_reg in rows:
+        if b_p50 is None or c_p50 is None:
+            table.add_row(str(seq_len), "—", "—", "—", "[dim]no data[/dim]")
+            continue
+        delta_str = f"{delta_ms:+.1f} ms"
+        if is_reg:
+            reg_str = f"[red]✗ +{pct:.0f}%[/red]"
+            delta_col = f"[red]{delta_str}[/red]"
+        elif pct > 0:
+            reg_str = f"[yellow]⚠ +{pct:.0f}%[/yellow]"
+            delta_col = f"[yellow]{delta_str}[/yellow]"
+        else:
+            reg_str = "[green]—[/green]"
+            delta_col = f"[green]{delta_str}[/green]"
+        table.add_row(str(seq_len), f"{b_p50:.1f} ms", f"{c_p50:.1f} ms", delta_col, reg_str)
+
+    console.print(table)
+    console.print()
+
+    if regression_detected:
+        console.print(Panel.fit(
+            "[bold red]⚠ REGRESSION DETECTED[/bold red]\n"
+            f"One or more seq-len buckets exceeded the {latency_threshold}% threshold.",
+            border_style="red",
+        ))
+    else:
+        console.print(Panel.fit(
+            "[bold green]✓ NO REGRESSION[/bold green]\n"
+            f"All seq-len buckets within {latency_threshold}% threshold.",
+            border_style="green",
+        ))
+
+    return 1 if regression_detected else 0
+
+
 def _run_comparison(
     baseline, candidate,
     runs, warmup, cu_enum,
     latency_threshold, size_threshold,
     metric, as_json, ci_mode,
     command_name="compare",
+    resolved_task=TaskType.UNKNOWN,   # --- PATCH ---
 ):
     if not as_json:
         console.print(f"\n[bold]Regression Detection[/bold]")
         console.print(f"Baseline:  {baseline.name or baseline.build_id[:12]} ({getattr(baseline, 'quantization_type', '?')})")
         console.print(f"Candidate: {candidate.name or candidate.build_id[:12]} ({getattr(candidate, 'quantization_type', '?')})")
         console.print(f"Latency threshold: {latency_threshold}%  |  Size threshold: {size_threshold}%")
-        console.print(f"Metric: {metric}\n")
+        console.print(f"Metric: {metric}")
+        console.print(f"Task: {resolved_task.value}")   # --- PATCH: Task header line ---
+        console.print()
+
+    # --- PATCH: NLP takes the bucket path ---
+    if resolved_task == TaskType.NLP:
+        return _run_nlp_comparison(baseline, candidate, latency_threshold, as_json, ci_mode)
 
     baseline_size_mb = _get_size_mb(baseline)
     candidate_size_mb = _get_size_mb(candidate)
@@ -198,6 +333,7 @@ def _run_comparison(
             "size_regression": size_regression,
             "thresholds": {"latency_pct": latency_threshold, "size_pct": size_threshold},
             "metric": metric,
+            "task": resolved_task.value,   # --- PATCH ---
             "statistical": {
                 "p_value": float(regression.p_value),
                 "significant": bool(regression.p_value < 0.05),
@@ -273,7 +409,14 @@ def _run_comparison(
 @click.option("--warmup", default=20, type=int)
 @click.option("--json", "as_json", is_flag=True)
 @click.option("--ci", is_flag=True)
-def compare(baseline_id, candidate_id, threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, ci):
+# --- PATCH: --task flag ---
+@click.option(
+    "--task",
+    type=click.Choice(["vision", "nlp", "audio", "unknown"]),
+    default=None,
+    help="Override task type. Falls back to baseline build's registry record if omitted.",
+)
+def compare(baseline_id, candidate_id, threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, ci, task):
     """Compare two builds and detect regressions in latency and size."""
     try:
         registry = LocalRegistry()
@@ -285,11 +428,21 @@ def compare(baseline_id, candidate_id, threshold, size_threshold, metric, comput
         if not candidate:
             console.print(f"[red]Candidate not found: {candidate_id}[/red]")
             sys.exit(2)
+
+        # --- PATCH: resolve task from flag → baseline registry → UNKNOWN ---
+        if task:
+            resolved_task = TaskType(task)
+        elif getattr(baseline, 'task_type', None):
+            resolved_task = TaskType(baseline.task_type)
+        else:
+            resolved_task = TaskType.UNKNOWN
+
         exit_code = _run_comparison(
             baseline=baseline, candidate=candidate,
             runs=runs, warmup=warmup, cu_enum=ComputeUnit[compute_unit],
             latency_threshold=threshold, size_threshold=size_threshold,
             metric=metric, as_json=as_json, ci_mode=ci,
+            resolved_task=resolved_task,   # --- PATCH ---
         )
         if ci:
             sys.exit(exit_code)
@@ -313,7 +466,14 @@ def compare(baseline_id, candidate_id, threshold, size_threshold, metric, comput
 @click.option("--warmup", default=10, type=int)
 @click.option("--json", "as_json", is_flag=True)
 @click.option("--strict", is_flag=True)
-def ci_check(baseline_id, candidate_id, latency_threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, strict):
+# --- PATCH: --task flag ---
+@click.option(
+    "--task",
+    type=click.Choice(["vision", "nlp", "audio", "unknown"]),
+    default=None,
+    help="Override task type. Falls back to baseline build's registry record if omitted.",
+)
+def ci_check(baseline_id, candidate_id, latency_threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, strict, task):
     """CI regression gate. Exits 0 (pass), 1 (regression), or 2 (error)."""
     try:
         registry = LocalRegistry()
@@ -325,6 +485,15 @@ def ci_check(baseline_id, candidate_id, latency_threshold, size_threshold, metri
         if not candidate:
             console.print(f"[red]Candidate not found: {candidate_id}[/red]")
             sys.exit(2)
+
+        # --- PATCH: resolve task from flag → baseline registry → UNKNOWN ---
+        if task:
+            resolved_task = TaskType(task)
+        elif getattr(baseline, 'task_type', None):
+            resolved_task = TaskType(baseline.task_type)
+        else:
+            resolved_task = TaskType.UNKNOWN
+
         effective_latency = 0.0 if strict else latency_threshold
         effective_size = 0.0 if strict else size_threshold
         if strict and not as_json:
@@ -335,6 +504,7 @@ def ci_check(baseline_id, candidate_id, latency_threshold, size_threshold, metri
             latency_threshold=effective_latency, size_threshold=effective_size,
             metric=metric, as_json=as_json, ci_mode=True,
             command_name="ci-check",
+            resolved_task=resolved_task,   # --- PATCH ---
         )
         sys.exit(exit_code)
     except MLBuildError as e:

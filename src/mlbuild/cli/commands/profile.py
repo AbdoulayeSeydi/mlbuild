@@ -28,6 +28,7 @@ Standard flags (all formats):
   --analyze-warmup     Warmup stability analysis
 """
 
+import sys
 import click
 from rich.console import Console
 from rich.table import Table
@@ -38,7 +39,93 @@ from pathlib import Path
 from ...registry import LocalRegistry
 from ...profiling import CumulativeLayerProfiler
 
+# --- PATCH: task-aware imports ---
+from ...core.task_detection import TaskType
+from ...core.task_inputs import TaskInputFactory, ModelInfo as InputModelInfo
+from ...core.task_validation import (
+    TaskOutputValidator,
+    StrictOutputConfig,
+    format_validation_warning,
+    should_exit_on_validation,
+)
+
 console = Console()
+
+
+# --- PATCH: shared helper (mirrors build.py / benchmark.py) ---
+def _read_global_strict() -> bool:
+    """Read [validation] strict_output from .mlbuild/config.toml if present."""
+    try:
+        config_path = Path(".mlbuild/config.toml")
+        if not config_path.exists():
+            return False
+        import tomllib
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        return bool(data.get("validation", {}).get("strict_output", False))
+    except Exception:
+        return False
+
+
+# --- PATCH: build task-aware synthetic inputs for a single inference pass ---
+def _build_profile_inputs(artifact_path: Path, fmt: str, task: TaskType, seq_len: int) -> dict:
+    """
+    Return a name→ndarray dict of synthetic inputs appropriate for the task.
+
+    Falls back to zeros on any failure so profiling never silently breaks.
+    seq_len is only used for NLP (single representative pass, not the full ladder).
+    """
+    try:
+        import numpy as np
+
+        if fmt in ("coreml", "mlpackage") or artifact_path.is_dir():
+            import coremltools as ct
+            spec = ct.models.MLModel(str(artifact_path)).get_spec()
+            input_specs = [
+                (inp.name, tuple(max(d, 1) for d in inp.type.multiArrayType.shape))
+                for inp in spec.description.input
+            ]
+            input_names  = [n for n, _ in input_specs]
+            input_shapes = {n: s for n, s in input_specs}
+
+        elif fmt == "tflite":
+            import tensorflow as tf
+            interp = tf.lite.Interpreter(model_path=str(artifact_path))
+            interp.allocate_tensors()
+            input_names  = [d["name"] for d in interp.get_input_details()]
+            input_shapes = {d["name"]: tuple(d["shape"]) for d in interp.get_input_details()}
+
+        else:
+            return {}
+
+        info = InputModelInfo(
+            op_types=[],
+            input_shapes=input_shapes,
+            input_names=input_names,
+            metadata={},
+            num_nodes=0,
+        )
+
+        factory = TaskInputFactory(info)
+        schemas = factory.build_input_schemas(task)
+
+        # For NLP, override sequence dimension with the representative seq_len
+        if task == TaskType.NLP:
+            from ...core.task_inputs import get_nlp_seq_lens
+            schemas = factory.build_input_schemas(task, seq_len=seq_len)
+
+        return {name: arr for name, arr in schemas.items()}
+
+    except Exception:
+        # Graceful fallback — zeros, same shapes as before
+        import numpy as np
+        try:
+            return {
+                name: np.zeros(shape, dtype=np.float32)
+                for name, shape in input_shapes.items()
+            }
+        except Exception:
+            return {}
 
 
 # ============================================================
@@ -703,9 +790,33 @@ def _display_warmup_analysis_coreml(artifact_path: Path):
 @click.option('--memory',          is_flag=True,          help='Peak RSS memory profiling')
 @click.option('--cold-start-runs', default=60,  type=int, help='Runs for cold start (default: 60)')
 @click.option('--quant-samples',   default=50,  type=int, help='Samples for quant sensitivity (default: 50)')
+# --- PATCH: --task flag ---
+@click.option(
+    '--task',
+    type=click.Choice(['vision', 'nlp', 'audio', 'unknown']),
+    default=None,
+    help='Override task type. Falls back to registry build record if omitted.',
+)
+# --- PATCH: --seq-len flag (NLP representative pass, not full ladder) ---
+@click.option(
+    '--seq-len',
+    'seq_len',
+    default=128,
+    type=int,
+    help='NLP representative sequence length for profiling (default: 128).',
+)
+# --- PATCH: --strict-output flag ---
+@click.option(
+    '--strict-output',
+    'strict_output',
+    is_flag=True,
+    default=False,
+    help='Hard-fail on output validation warnings (overrides config.toml).',
+)
 def profile(
     build_id, runs, warmup, top, deep, int8_build,
     analyze_warmup, cold_start, memory, cold_start_runs, quant_samples,
+    task, seq_len, strict_output,  # --- PATCH ---
 ):
     """
     Profile model performance. Supports CoreML and TFLite.
@@ -736,6 +847,7 @@ def profile(
       mlbuild profile <build_id> --cold-start
       mlbuild profile <build_id> --memory
       mlbuild profile <build_id> --cold-start --memory
+      mlbuild profile <build_id> --task nlp --seq-len 256
     """
     console.print(f"\n[bold]Model Profiling[/bold]")
     console.print(f"Build: [cyan]{build_id[:16]}...[/cyan]\n")
@@ -748,6 +860,27 @@ def profile(
         raise SystemExit(1)
 
     artifact_path = Path(build.artifact_path)
+
+    # --- PATCH: resolve task (flag → registry → unknown) ---
+    if task:
+        resolved_task = TaskType(task)
+    elif getattr(build, 'task_type', None):
+        resolved_task = TaskType(build.task_type)
+    else:
+        resolved_task = TaskType.UNKNOWN
+
+    # --- PATCH: resolve StrictOutputConfig + validator ---
+    strict_cfg = StrictOutputConfig.from_command(
+        strict_flag=strict_output,
+        global_strict=_read_global_strict(),
+    )
+    validator = TaskOutputValidator(config=strict_cfg)
+
+    # --- PATCH: print Task line in header ---
+    console.print(f"[dim]Task: {resolved_task.value}[/dim]")
+
+    # --- PATCH: build task-aware synthetic inputs once (used by memory profiling) ---
+    profile_inputs = _build_profile_inputs(artifact_path, build.format, resolved_task, seq_len)
 
     # ── Cold start (standard, any format) ────────────────────
     if cold_start and not deep:
@@ -775,19 +908,32 @@ def profile(
                 TFLiteBenchmarkRunner().benchmark(model_path=artifact_path, runs=runs, warmup=warmup)
                 mem_profiler.stop()
             else:
+                # --- PATCH: use task-aware inputs instead of random zeros ---
                 import coremltools as ct
-                import numpy as np
                 mem_profiler.start()
                 model = ct.models.MLModel(str(artifact_path))
-                spec = model.get_spec()
-                inputs = {
-                    inp.name: np.random.rand(*tuple(max(d, 1) for d in inp.type.multiArrayType.shape)).astype(np.float32)
-                    for inp in spec.description.input
-                }
+                outputs = {}
                 for _ in range(runs):
-                    try: model.predict(inputs)
-                    except Exception: pass
+                    try:
+                        outputs = model.predict(profile_inputs) or {}
+                    except Exception:
+                        pass
                 mem_profiler.stop()
+
+                # --- PATCH: validate outputs from the last inference pass ---
+                if outputs:
+                    import numpy as np
+                    np_outputs = {
+                        k: (v if isinstance(v, np.ndarray) else np.array(v))
+                        for k, v in outputs.items()
+                    }
+                    val_result = validator.validate(np_outputs, resolved_task)
+                    warn_str = format_validation_warning(val_result)
+                    if warn_str:
+                        console.print(warn_str)
+                    if should_exit_on_validation(val_result, strict_cfg):
+                        console.print("[red]✗ Output validation failed (strict mode)[/red]")
+                        sys.exit(1)
 
             _display_memory_report(mem_profiler.report())
         except Exception as e:
@@ -809,7 +955,8 @@ def profile(
             else:
                 console.print(f"[yellow]INT8 build not found: {int8_build} — skipping quant sensitivity[/yellow]\n")
 
-        profiler = TFLiteDeepProfiler(artifact_path)
+        # --- PATCH: pass task-aware inputs to deep profiler ---
+        profiler = TFLiteDeepProfiler(artifact_path, inputs=profile_inputs or None)
 
         # 1. Per-op timing
         console.print("[cyan]① Profiling per-op timing...[/cyan]")
@@ -867,6 +1014,25 @@ def profile(
         except Exception as e:
             console.print(f"[yellow]Fusion detection: {e}[/yellow]")
 
+        # --- PATCH: validate outputs from deep profiler's inference pass ---
+        try:
+            raw_outputs = profiler.last_outputs  # populated by profile_op_timing if supported
+            if raw_outputs:
+                import numpy as np
+                np_outputs = {
+                    k: (v if isinstance(v, np.ndarray) else np.array(v))
+                    for k, v in raw_outputs.items()
+                }
+                val_result = validator.validate(np_outputs, resolved_task)
+                warn_str = format_validation_warning(val_result)
+                if warn_str:
+                    console.print(warn_str)
+                if should_exit_on_validation(val_result, strict_cfg):
+                    console.print("[red]✗ Output validation failed (strict mode)[/red]")
+                    sys.exit(1)
+        except AttributeError:
+            pass  # profiler doesn't expose last_outputs yet — no-op
+
         console.print()
         return
 
@@ -896,7 +1062,9 @@ def profile(
         from ...backends.coreml.deep_profiler import CoreMLDeepProfiler
 
         console.print(f"[bold]CoreML Deep Profile[/bold] [dim]— {artifact_path.name}[/dim]\n")
-        deep_profiler = CoreMLDeepProfiler(artifact_path)
+
+        # --- PATCH: pass task-aware inputs to deep profiler ---
+        deep_profiler = CoreMLDeepProfiler(artifact_path, inputs=profile_inputs or None)
 
         if deep_profiler.model_type == "mlProgram":
             _display_mlprogram_deep_note()
@@ -957,6 +1125,25 @@ def profile(
             _display_coreml_fusion(result.fusion_groups, result.unfused_opportunities)
         except Exception as e:
             console.print(f"[yellow]Fusion display: {e}[/yellow]")
+
+        # --- PATCH: validate outputs from CoreML deep profiler ---
+        try:
+            raw_outputs = getattr(result, 'last_outputs', None)
+            if raw_outputs:
+                import numpy as np
+                np_outputs = {
+                    k: (v if isinstance(v, np.ndarray) else np.array(v))
+                    for k, v in raw_outputs.items()
+                }
+                val_result = validator.validate(np_outputs, resolved_task)
+                warn_str = format_validation_warning(val_result)
+                if warn_str:
+                    console.print(warn_str)
+                if should_exit_on_validation(val_result, strict_cfg):
+                    console.print("[red]✗ Output validation failed (strict mode)[/red]")
+                    sys.exit(1)
+        except Exception:
+            pass
 
         console.print()
         return

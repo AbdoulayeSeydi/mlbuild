@@ -15,7 +15,31 @@ from pathlib import Path
 from ...registry import LocalRegistry
 from ...benchmark.runner import CoreMLBenchmarkRunner, ComputeUnit
 
+# --- PATCH: task-aware imports ---
+from ...core.task_detection import TaskType
+from ...core.task_validation import (
+    TaskOutputValidator,
+    StrictOutputConfig,
+    format_validation_warning,
+    should_exit_on_validation,
+)
+
 console = Console()
+
+
+# --- PATCH: shared helper ---
+def _read_global_strict() -> bool:
+    """Read [validation] strict_output from .mlbuild/config.toml if present."""
+    try:
+        config_path = Path(".mlbuild/config.toml")
+        if not config_path.exists():
+            return False
+        import tomllib
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        return bool(data.get("validation", {}).get("strict_output", False))
+    except Exception:
+        return False
 
 
 def _benchmark_build(build, runs, warmup, compute_unit):
@@ -35,6 +59,7 @@ def _benchmark_build(build, runs, warmup, compute_unit):
             latency_p95 = metrics["p95_ms"]
             latency_p99 = metrics["p99_ms"]
             memory_peak_mb = max(metrics["memory_rss_mb"], 0.0)
+            outputs = {}  # TFLite runner doesn't expose outputs here
         return _Result()
 
     else:
@@ -50,6 +75,7 @@ def _benchmark_build(build, runs, warmup, compute_unit):
             benchmark_runs=runs,
         )
         result, _ = runner.run(build_id=build.build_id, return_raw=True)
+        result.outputs = getattr(result, 'outputs', {})
         return result
 
 
@@ -63,6 +89,21 @@ def _benchmark_build(build, runs, warmup, compute_unit):
 @click.option('--warmup', default=10, type=int, help='Warmup runs')
 @click.option('--compute-unit', default='all', type=click.Choice(['all', 'cpu', 'gpu']))
 @click.option('--ci', is_flag=True, help='CI mode (suppress output, exit codes only)')
+# --- PATCH: --task flag ---
+@click.option(
+    '--task',
+    type=click.Choice(['vision', 'nlp', 'audio', 'unknown']),
+    default=None,
+    help='Override task type. Falls back to registry build record if omitted.',
+)
+# --- PATCH: --strict-output flag ---
+@click.option(
+    '--strict-output',
+    'strict_output',
+    is_flag=True,
+    default=False,
+    help='Hard-fail on output validation warnings (overrides config.toml).',
+)
 def validate(
     build_id: str,
     max_latency: float,
@@ -73,6 +114,8 @@ def validate(
     warmup: int,
     compute_unit: str,
     ci: bool,
+    task: str,
+    strict_output: bool,
 ):
     """
     Validate build against performance constraints.
@@ -96,6 +139,25 @@ def validate(
         if not ci:
             console.print(f"[red]Build not found: {build_id}[/red]")
         sys.exit(1)
+
+    # --- PATCH: resolve task (flag → registry → unknown) ---
+    if task:
+        resolved_task = TaskType(task)
+    elif getattr(build, 'task_type', None):
+        resolved_task = TaskType(build.task_type)
+    else:
+        resolved_task = TaskType.UNKNOWN
+
+    # --- PATCH: resolve StrictOutputConfig + validator ---
+    strict_cfg = StrictOutputConfig.from_command(
+        strict_flag=strict_output,
+        global_strict=_read_global_strict(),
+    )
+    validator = TaskOutputValidator(config=strict_cfg)
+
+    # --- PATCH: print Task line in header ---
+    if not ci:
+        console.print(f"[dim]Task: {resolved_task.value}[/dim]\n")
 
     violations = []
 
@@ -144,6 +206,28 @@ def validate(
                     'unit': 'MB',
                 })
 
+            # --- PATCH: output validation from the benchmark inference pass ---
+            raw_outputs = getattr(result, 'outputs', {})
+            if raw_outputs:
+                import numpy as np
+                np_outputs = {
+                    k: (v if isinstance(v, np.ndarray) else np.array(v))
+                    for k, v in raw_outputs.items()
+                }
+                val_result = validator.validate(np_outputs, resolved_task)
+                warn_str = format_validation_warning(val_result)
+                if warn_str:
+                    if ci:
+                        print(warn_str)
+                    else:
+                        console.print(warn_str)
+                if should_exit_on_validation(val_result, strict_cfg):
+                    if ci:
+                        print("FAILED: output validation (strict mode)")
+                    else:
+                        console.print("[red]✗ Output validation failed (strict mode)[/red]")
+                    sys.exit(1)
+
         except Exception as e:
             if not ci:
                 console.print(f"[red]Benchmark failed: {e}[/red]")
@@ -154,7 +238,9 @@ def validate(
         _report_violations(violations, ci)
         sys.exit(1)
     else:
-        if not ci:
+        if ci:
+            print("✓ All constraints passed")
+        else:
             console.print("[bold green]✓ All constraints passed[/bold green]\n")
         sys.exit(0)
 

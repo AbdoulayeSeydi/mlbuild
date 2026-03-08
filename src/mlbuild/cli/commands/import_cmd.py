@@ -39,6 +39,10 @@ from mlbuild.core.environment import collect_environment, hash_environment
 from mlbuild.core.types import Build
 from mlbuild.core.errors import InternalError
 
+# --- PATCH: task detection + validation config ---
+from mlbuild.core.task_detection import detect_task, detection_warning, ModelInfo, TaskType
+from mlbuild.core.task_validation import StrictOutputConfig
+
 console = Console()
 
 # ================================================================
@@ -96,6 +100,48 @@ def dir_size_bytes(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
+def _read_global_strict() -> bool:
+    """Read [validation] strict_output from .mlbuild/config.toml if present."""
+    try:
+        config_path = Path(".mlbuild/config.toml")
+        if not config_path.exists():
+            return False
+        import tomllib  # Python 3.11+
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        return bool(data.get("validation", {}).get("strict_output", False))
+    except Exception:
+        return False
+
+
+def _detect_task_from_nongraph(model: Path, fmt: str, forced_task: str | None):
+    """
+    Task detection for TFLite / CoreML formats (Tier 2/3 only — no ONNX graph).
+
+    Builds ModelInfo from file path heuristics (name + extension) and
+    delegates to detect_task(). Tier 1 graph analysis is unavailable
+    for non-ONNX formats — detection relies on name patterns and shapes.
+
+    forced_task : value of --task flag (str) or None for auto-detect.
+    Returns a TaskDetection (arbitration result).
+    """
+    # Derive input name hints from the filename stem
+    stem = model.stem.lower()
+    input_names = [stem]
+
+    # No op graph available — pass empty op_types so Tier 1 is skipped
+    info = ModelInfo(
+        op_types=[],
+        input_shapes={},
+        input_names=input_names,
+        metadata={"model_name": stem, "format": fmt},
+        num_nodes=0,
+    )
+
+    forced = TaskType(forced_task) if forced_task else None
+    return detect_task(info, forced=forced)
+
+
 # ================================================================
 # CLI Command
 # ================================================================
@@ -128,9 +174,39 @@ def dir_size_bytes(path: Path) -> int:
 @click.option("--name", default=None, help="Human-friendly name for this build.")
 @click.option("--notes", default=None, help="Optional notes about the model's origin.")
 @click.option("--json", "as_json", is_flag=True, help="Output result as JSON.")
-def import_cmd(model: Path, target: str, quantize: str, name: Optional[str], notes: Optional[str], as_json: bool):
+# --- PATCH: --task flag ---
+@click.option(
+    "--task",
+    type=click.Choice(["vision", "nlp", "audio", "unknown"]),
+    default=None,
+    help="Model task type. Auto-detected from filename/metadata if omitted.",
+)
+# --- PATCH: --strict-output flag ---
+@click.option(
+    "--strict-output",
+    "strict_output",
+    is_flag=True,
+    default=False,
+    help="Hard-fail on output validation warnings (overrides config.toml).",
+)
+def import_cmd(
+    model: Path,
+    target: str,
+    quantize: str,
+    name: Optional[str],
+    notes: Optional[str],
+    as_json: bool,
+    task: Optional[str],
+    strict_output: bool,
+):
+    # --- PATCH: resolve StrictOutputConfig once, available downstream ---
+    strict_cfg = StrictOutputConfig.from_command(
+        strict_flag=strict_output,
+        global_strict=_read_global_strict(),
+    )
+
     try:
-        _run_import(model, target, quantize, name, notes, as_json)
+        _run_import(model, target, quantize, name, notes, as_json, task, strict_cfg)
     except (ModelFormatError, TargetCompatibilityError) as exc:
         console.print(f"[bold red]Import failed:[/bold red] {exc}")
         sys.exit(1)
@@ -144,7 +220,16 @@ def import_cmd(model: Path, target: str, quantize: str, name: Optional[str], not
 # Core Import Logic
 # ================================================================
 
-def _run_import(model: Path, target: str, quantize: str, name: Optional[str], notes: Optional[str], as_json: bool):
+def _run_import(
+    model: Path,
+    target: str,
+    quantize: str,
+    name: Optional[str],
+    notes: Optional[str],
+    as_json: bool,
+    task: Optional[str],
+    strict_cfg: StrictOutputConfig,
+):
     # Step 1: Detect format
     console.print(f"[bold]Importing:[/bold] {model.name}")
     fmt = detect_and_validate_format(model)
@@ -176,6 +261,13 @@ def _run_import(model: Path, target: str, quantize: str, name: Optional[str], no
     console.print("[dim]Collecting environment...[/dim]")
     env_data = collect_environment()
     env_fingerprint = hash_environment(env_data)
+
+    # Step 5.5: Task detection (Tier 2/3 only — TFLite/CoreML have no ONNX graph)
+    # --- PATCH ---
+    task_result = _detect_task_from_nongraph(model, fmt, forced_task=task)
+    warn = detection_warning(task_result)
+    if warn:
+        console.print(f"\n[yellow]{warn}[/yellow]")
 
     # Step 6: Prepare artifact store (atomic copy)
     artifacts_root = Path(".mlbuild/artifacts").resolve()
@@ -226,6 +318,7 @@ def _run_import(model: Path, target: str, quantize: str, name: Optional[str], no
         os_version=env_data["hardware"]["cpu"]["release"],
         artifact_path=str(final_path),
         size_mb=size_mb,
+        task_type=task_result.primary.value,  # --- PATCH ---
     )
 
     # Step 10: Register build (handle duplicates explicitly)
@@ -250,6 +343,7 @@ def _run_import(model: Path, target: str, quantize: str, name: Optional[str], no
         "size_mb": round(size_mb, 2),
         "artifact_path": str(final_path),
         "imported": True,
+        "task": task_result.primary.value,  # --- PATCH ---
     }
 
     if as_json:
@@ -260,5 +354,6 @@ def _run_import(model: Path, target: str, quantize: str, name: Optional[str], no
         console.print(f"Artifact Hash: {art_hash[:16]}...")
         console.print(f"Source Hash:   {source_hash[:16]}...")
         console.print(f"Size:          {size_mb:.2f} MB")
+        console.print(f"Task:          {task_result.primary.value}")
         console.print(f"Artifact Path: {final_path}", overflow="fold")
         console.print(f"\n[dim]Tip: run 'mlbuild benchmark {bid[:16]}' to profile this model.[/dim]\n")

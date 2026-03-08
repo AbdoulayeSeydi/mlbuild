@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MLBuild Report — mobilenet-coreml-fp16</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:        #0d0f12;
+    --bg2:       #141720;
+    --bg3:       #1c2030;
+    --border:    #2a2f3f;
+    --border2:   #363d52;
+    --text:      #c8d0e0;
+    --text-dim:  #6b7592;
+    --text-head: #e8edf8;
+    --accent:    #4f8ef7;
+    --accent2:   #7eb8f7;
+    --green:     #3dd68c;
+    --red:       #f76f6f;
+    --yellow:    #f7c948;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 40px 24px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+  }
+
+  .header-left {}
+
+  .wordmark {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .build-name {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--text-head);
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+
+  .build-meta {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .badge-format  { background: #1a2540; color: var(--accent2); border: 1px solid #2a3f6f; }
+  .badge-quant   { background: #1a2d20; color: var(--green);   border: 1px solid #2a4f35; }
+  .badge-device  { background: #2a2010; color: var(--yellow);  border: 1px solid #4f3a10; }
+
+  .header-right {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 2;
+    white-space: nowrap;
+  }
+
+  .header-right strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ── Layout ── */
+  .main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 36px 40px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  /* ── Section ── */
+  .section {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg3);
+  }
+
+  .section-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .section-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .section-body { padding: 20px; }
+
+  /* ── Metric grid ── */
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+  }
+
+  .metric {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 16px;
+  }
+
+  .metric-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-head);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .metric-value-sm {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-head);
+    line-height: 1.4;
+    word-break: break-all;
+  }
+
+  .unit {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-dim);
+    margin-left: 3px;
+  }
+
+  /* ── Tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  thead tr {
+    border-bottom: 1px solid var(--border2);
+  }
+
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  tr.latest td { background: rgba(79,142,247,0.04); }
+  tr.current-row td { background: rgba(79,142,247,0.06); }
+
+  .green  { color: var(--green); }
+  .red    { color: var(--red); }
+  .neutral { color: var(--text-dim); }
+
+  /* ── Build info grid ── */
+  .info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+  }
+
+  .info-row {
+    display: contents;
+  }
+
+  .info-key {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: var(--bg3);
+  }
+
+  .info-val {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    padding: 9px 16px;
+    border-bottom: 1px solid var(--border);
+    word-break: break-all;
+  }
+
+  .info-key:nth-last-child(2),
+  .info-val:last-child {
+    border-bottom: none;
+  }
+
+  /* ── Recommendations ── */
+  .rec {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 14px 16px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    border: 1px solid;
+  }
+
+  .rec:last-child { margin-bottom: 0; }
+
+  .rec-ok     { background: rgba(61,214,140,0.05); border-color: rgba(61,214,140,0.2); }
+  .rec-action { background: rgba(247,201,72,0.05); border-color: rgba(247,201,72,0.2); }
+
+  .rec-icon {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-top: 1px;
+    flex-shrink: 0;
+    width: 20px;
+  }
+
+  .rec-ok .rec-icon   { color: var(--green); }
+  .rec-action .rec-icon { color: var(--yellow); }
+
+  .rec strong {
+    display: block;
+    font-size: 13px;
+    color: var(--text-head);
+    margin-bottom: 3px;
+  }
+
+  .rec p {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  .rec code {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--accent2);
+  }
+
+  /* ── Empty states ── */
+  .empty-state {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 20px 0;
+    text-align: center;
+  }
+
+  .empty-state code {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    padding: 2px 8px;
+    border-radius: 3px;
+    color: var(--accent2);
+  }
+
+  td.empty {
+    color: var(--text-dim);
+    text-align: center;
+    padding: 20px;
+  }
+
+  td.empty code {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    padding: 2px 8px;
+    border-radius: 3px;
+    color: var(--accent2);
+  }
+
+  /* ── Footer ── */
+  .footer {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    padding: 20px 0 0;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="wordmark">MLBuild · Performance Report</div>
+    <div class="build-name">mobilenet-coreml-fp16</div>
+    <div class="build-meta">
+      <span class="badge badge-format">COREML</span>
+      <span class="badge badge-quant">FP16</span>
+      <span class="badge badge-device">apple_m1</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <div><strong>Build ID</strong><br>6f5cfb33965ca7d277ac1e940bce57aa<br>4e4faafb6bb91fd23176a920ca2081d9</div>
+    <div style="margin-top:10px"><strong>Created</strong><br>2026-03-01 03:25 UTC</div>
+    <div style="margin-top:10px"><strong>Size</strong><br>6.743 MB</div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Benchmark Summary -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot"></div>
+      <div class="section-title">Latest Benchmark</div>
+    </div>
+    <div class="section-body">
+      
+        <div class="metric-grid">
+            <div class="metric">
+                <div class="metric-label">p50 latency</div>
+                <div class="metric-value">0.744<span class="unit">ms</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">p95 latency</div>
+                <div class="metric-value">0.759<span class="unit">ms</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">p99 latency</div>
+                <div class="metric-value">0.769<span class="unit">ms</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">throughput</div>
+                <div class="metric-value">1343.5<span class="unit">inf/s</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">peak memory</div>
+                <div class="metric-value">584.34<span class="unit">MB</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">runs</div>
+                <div class="metric-value">98<span class="unit">samples</span></div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">device</div>
+                <div class="metric-value-sm">apple_m1</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">compute unit</div>
+                <div class="metric-value-sm">ALL</div>
+            </div>
+        </div>
+    
+    </div>
+  </div>
+
+  <!-- Build Info -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot" style="background:var(--green)"></div>
+      <div class="section-title">Build Info</div>
+    </div>
+    <div class="info-grid">
+      <div class="info-key">Artifact Path</div>
+      <div class="info-val">/Users/abdoulayeseydi/mlbuild/.mlbuild/artifacts/091427d87247e67e8421cba3a1428353a7ed87b983a7519c356a33becb56b206</div>
+      <div class="info-key">Format</div>
+      <div class="info-val">coreml</div>
+      <div class="info-key">Target Device</div>
+      <div class="info-val">apple_m1</div>
+      <div class="info-key">Quantization</div>
+      <div class="info-val">FP16</div>
+      <div class="info-key">Size</div>
+      <div class="info-val">6.7425 MB (7,070,065 bytes)</div>
+      <div class="info-key">Created</div>
+      <div class="info-val">2026-03-01 03:25 UTC</div>
+      <div class="info-key">Build ID</div>
+      <div class="info-val">6f5cfb33965ca7d277ac1e940bce57aa4e4faafb6bb91fd23176a920ca2081d9</div>
+    </div>
+  </div>
+
+  <!-- Quantization Details -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot" style="background:var(--yellow)"></div>
+      <div class="section-title">Quantization Details</div>
+    </div>
+    <div class="section-body">
+      <table>
+        <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+        <tbody><tr><td>type</td><td>fp16</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Benchmark History -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot" style="background:var(--accent2)"></div>
+      <div class="section-title">Benchmark History</div>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-left:auto">last 1 of 1 runs</span>
+    </div>
+    <div class="section-body" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>Measured At</th><th>Device</th><th>Compute</th>
+            <th>p50</th><th>p95</th><th>p99</th>
+            <th>Throughput</th><th>Memory</th><th>Runs</th>
+          </tr>
+        </thead>
+        <tbody>
+            <tr class="latest">
+                <td>2026-03-05 15:32</td>
+                <td>apple_m1</td>
+                <td>ALL</td>
+                <td>0.744 ms</td>
+                <td>0.759 ms</td>
+                <td>0.769 ms</td>
+                <td>1343.5 inf/s</td>
+                <td>584.34 MB</td>
+                <td>98</td>
+            </tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Related Builds -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot" style="background:#a78bfa"></div>
+      <div class="section-title">Related Builds</div>
+    </div>
+    <div class="section-body" style="padding: 0">
+      
+        <table>
+            <thead>
+                <tr>
+                    <th>Build</th><th>Format</th><th>Quant</th>
+                    <th>Size</th><th>Δ Size</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="current-row">
+                    <td><strong>mobilenet-coreml-fp16</strong> ← this</td>
+                    <td>coreml</td>
+                    <td>FP16</td>
+                    <td>6.74 MB</td>
+                    <td class="neutral">—</td>
+                </tr>
+                
+            <tr>
+                <td>mobilenet-coreml-fp32</td>
+                <td>coreml</td>
+                <td>FP32</td>
+                <td>13.39 MB</td>
+                <td class="red">+98.6% vs this</td>
+            </tr>
+            </tbody>
+        </table>
+    
+    </div>
+  </div>
+
+  <!-- Recommendations -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-dot" style="background:var(--yellow)"></div>
+      <div class="section-title">Recommendations</div>
+    </div>
+    <div class="section-body">
+      
+        <div class="rec rec-action">
+            <span class="rec-icon">⚠</span>
+            <div>
+                <strong>Peak RSS 584.3 MB is high.</strong>
+                <p>Consider quantization to reduce runtime memory footprint.</p>
+            </div>
+        </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Generated by MLBuild · 2026-03-05 15:34 UTC
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,5 +1,5 @@
 """
-SQLite schema for MLBuild registry (v5).
+SQLite schema for MLBuild registry (v6).
 
 Invariants:
 - artifact_hash = SHA256 of normalized CoreML artifact
@@ -15,11 +15,17 @@ Builds are soft-deletable (deleted_at).
 v5 changes:
 - Added `imported` INTEGER NOT NULL DEFAULT 0 to builds table
   Populated from backend_versions JSON for existing rows on migration.
+
+v6 changes:
+- Added `task_type` TEXT NULL to builds table.
+  NULL = unknown (existing builds unaffected, show as 'unknown' in log/report).
+  Valid values: 'vision', 'nlp', 'audio', 'multimodal', 'unknown'.
+  Populated by mlbuild build / mlbuild import via auto-detect or --task flag.
 """
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -34,9 +40,9 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TEXT NOT NULL
 );
 
--- Insert schema version v5 (ignore if exists)
+-- Insert schema version v6 (ignore if exists)
 INSERT OR IGNORE INTO schema_version (id, version, applied_at)
-VALUES (1, 5, datetime('now'));
+VALUES (1, 6, datetime('now'));
 
 
 -- ============================================================
@@ -79,7 +85,15 @@ CREATE TABLE IF NOT EXISTS builds (
 
     -- v5: explicit imported flag.
     -- 1 = registered via mlbuild import, 0 = produced by mlbuild build.
-    imported INTEGER NOT NULL DEFAULT 0 CHECK (imported IN (0, 1))
+    imported INTEGER NOT NULL DEFAULT 0 CHECK (imported IN (0, 1)),
+
+    -- v6: task type detected or specified at build/import time.
+    -- NULL = unknown (pre-v6 builds). Displayed as 'unknown' in log/report.
+    -- Valid: 'vision' | 'nlp' | 'audio' | 'multimodal' | 'unknown'
+    task_type TEXT CHECK (
+        task_type IS NULL OR
+        task_type IN ('vision', 'nlp', 'audio', 'multimodal', 'unknown')
+    )
 );
 
 -- Active-build uniqueness only (allows recreation after soft delete)
@@ -116,7 +130,7 @@ CREATE TABLE IF NOT EXISTS benchmarks (
     measured_at TEXT NOT NULL,
 
     FOREIGN KEY(build_id) REFERENCES builds(build_id) ON DELETE CASCADE,
-    
+
     UNIQUE (
         build_id,
         device_chip,
@@ -149,7 +163,7 @@ CREATE TABLE IF NOT EXISTS tags (
 
 CREATE TABLE IF NOT EXISTS experiments (
     experiment_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,  
+    name TEXT NOT NULL,
     description TEXT,
     created_at TEXT NOT NULL,
     deleted_at TEXT,
@@ -170,15 +184,15 @@ CREATE TABLE IF NOT EXISTS runs (
     ),
     started_at TEXT NOT NULL,
     ended_at TEXT,
-    
+
     -- Link to build (optional)
     build_id TEXT,
-    
+
     -- Metadata
-    params TEXT CHECK (json_valid(params)),
+    params  TEXT CHECK (json_valid(params)),
     metrics TEXT CHECK (json_valid(metrics)),
-    tags TEXT CHECK (json_valid(tags)),
-    
+    tags    TEXT CHECK (json_valid(tags)),
+
     FOREIGN KEY(experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
     FOREIGN KEY(build_id) REFERENCES builds(build_id) ON DELETE SET NULL
 );
@@ -228,6 +242,10 @@ CREATE INDEX IF NOT EXISTS idx_builds_artifact_hash
 CREATE INDEX IF NOT EXISTS idx_builds_imported
     ON builds(imported);
 
+-- v6: index for task_type filtering (mlbuild log --task vision)
+CREATE INDEX IF NOT EXISTS idx_builds_task_type
+    ON builds(task_type);
+
 CREATE INDEX IF NOT EXISTS idx_benchmarks_build
     ON benchmarks(build_id);
 
@@ -262,3 +280,51 @@ WHERE json_extract(backend_versions, '$.imported') = 'true';
 UPDATE schema_version SET version = 5, applied_at = datetime('now')
 WHERE id = 1;
 """
+
+
+# ============================================================
+# Migration: v5 → v6  [ADDED]
+# ============================================================
+
+MIGRATION_V5_TO_V6 = """
+-- Add task_type column (nullable — existing builds unaffected).
+-- SQLite does not support CHECK constraints in ALTER TABLE,
+-- so constraint is enforced at the application layer for this column.
+ALTER TABLE builds ADD COLUMN task_type TEXT;
+
+-- No back-fill — existing builds stay NULL, displayed as 'unknown'.
+
+-- Add index for task_type filtering.
+CREATE INDEX IF NOT EXISTS idx_builds_task_type
+    ON builds(task_type);
+
+-- Bump schema version
+UPDATE schema_version SET version = 6, applied_at = datetime('now')
+WHERE id = 1;
+"""
+
+
+# ============================================================
+# Migration registry — ordered list of all migrations
+# ============================================================
+
+MIGRATIONS: list[tuple[int, int, str]] = [
+    (4, 5, MIGRATION_V4_TO_V5),
+    (5, 6, MIGRATION_V5_TO_V6),
+]
+
+
+def get_migration(from_version: int, to_version: int) -> str | None:
+    """
+    Return the SQL migration string for a given version jump, or None.
+
+    Usage (in LocalRegistry)
+    ------------------------
+    sql = get_migration(current_version, current_version + 1)
+    if sql:
+        conn.executescript(sql)
+    """
+    for src, dst, sql in MIGRATIONS:
+        if src == from_version and dst == to_version:
+            return sql
+    return None

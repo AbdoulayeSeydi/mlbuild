@@ -5,8 +5,22 @@ Design: Commands are loaded on-demand to prevent import errors
 from breaking the entire CLI.
 """
 
-import sys
 import click
+import os
+import sys
+
+# Suppress coremltools version warnings on startup
+_devnull = open(os.devnull, 'w')
+_old_stderr = sys.stderr
+sys.stderr = _devnull
+try:
+    import coremltools
+except Exception:
+    pass
+finally:
+    sys.stderr = _old_stderr
+    _devnull.close()
+
 from rich.console import Console
 from .commands.remote import remote
 from .commands.push import push
@@ -21,13 +35,35 @@ console = Console()
 
 @click.group()
 @click.version_option(version="0.2.0", prog_name="mlbuild")
-def cli():
+# --- PATCH: global --strict-output flag ---
+@click.option(
+    "--strict-output",
+    is_flag=True,
+    default=False,
+    help="Globally enable strict output validation (promotes warnings to failures).",
+)
+@click.pass_context
+def cli(ctx, strict_output):
     """
     MLBuild - Deterministic build system for CoreML models.
     
     Track model performance and prevent regressions in CI.
     """
-    pass
+    # Store in context so subcommands can read it via ctx.obj
+    ctx.ensure_object(dict)
+    ctx.obj["strict_output"] = strict_output
+
+
+# --- PATCH: helper for commands to merge global + local strict flag ---
+def _resolve_strict(ctx: click.Context, command_flag: bool) -> bool:
+    """
+    Command-level --strict-output always wins if set.
+    Falls back to global flag from ctx.obj, then False.
+    """
+    if command_flag:
+        return True
+    obj = ctx.find_root().obj or {}
+    return bool(obj.get("strict_output", False))
 
 
 # Lazy-load commands to prevent import errors from breaking the CLI
@@ -93,7 +129,11 @@ def build(model, backend, target, name, quantize, notes):
 @click.option('--tag', default=None)
 @click.option('--date-from', default=None)
 @click.option('--date-to', default=None)
-def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes, full_id, full_hashes, target, name, tag, date_from, date_to):
+# --- PATCH: --task filter forwarded from Step 11 ---
+@click.option('--task', default=None,
+              type=click.Choice(['vision', 'nlp', 'audio', 'multimodal', 'unknown']))
+def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes,
+        full_id, full_hashes, target, name, tag, date_from, date_to, task):
     """Show build history."""
     from .commands.log import log as log_cmd
     ctx = click.get_current_context()
@@ -113,6 +153,7 @@ def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes, ful
         tag=tag,
         date_from=date_from,
         date_to=date_to,
+        task=task,
     )
 
 
@@ -153,7 +194,11 @@ def diff(build_a, build_b, as_json, ignore_size, ignore_quant, deep):
               type=click.Choice(['CPU_ONLY', 'CPU_AND_GPU', 'ALL']),
               default='ALL')
 @click.option('--json', 'as_json', is_flag=True)
-def benchmark(build_id, runs, warmup, compute_unit, as_json):
+# --- PATCH: task + strict-output forwarded ---
+@click.option('--task', default=None,
+              type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
+@click.option('--strict-output', 'strict_output', is_flag=True, default=False)
+def benchmark(build_id, runs, warmup, compute_unit, as_json, task, strict_output):
     """Benchmark a build on current device. Supports CoreML and TFLite formats."""
     from .commands.benchmark import benchmark as benchmark_cmd
     ctx = click.get_current_context()
@@ -164,6 +209,8 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
         warmup=warmup,
         compute_unit=compute_unit,
         as_json=as_json,
+        task=task,
+        strict_output=_resolve_strict(ctx, strict_output),
     )
 
 @cli.command()
@@ -211,15 +258,28 @@ def compare_quantization(build_ids, runs, warmup, compute_unit, baseline, json_o
 @click.option('--memory',          is_flag=True)
 @click.option('--cold-start-runs', default=60,  type=int)
 @click.option('--quant-samples',   default=50,  type=int)
-def profile(build_id, runs, warmup, top, deep, int8_build, analyze_warmup, cold_start, memory, cold_start_runs, quant_samples):
+# --- PATCH: task + strict-output forwarded ---
+@click.option('--task', default=None,
+              type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
+@click.option('--seq-len', 'seq_len', default=128, type=int)
+@click.option('--strict-output', 'strict_output', is_flag=True, default=False)
+def profile(build_id, runs, warmup, top, deep, int8_build, analyze_warmup,
+            cold_start, memory, cold_start_runs, quant_samples,
+            task, seq_len, strict_output):
     """Profile model performance. Use --deep for full per-layer analysis (TFLite)."""
     from .commands.profile import profile as cmd
     ctx = click.get_current_context()
-    ctx.invoke(cmd, build_id=build_id, runs=runs, warmup=warmup, top=top,
-               deep=deep, int8_build=int8_build,
-               analyze_warmup=analyze_warmup, cold_start=cold_start,
-               memory=memory, cold_start_runs=cold_start_runs,
-               quant_samples=quant_samples)
+    ctx.invoke(
+        cmd,
+        build_id=build_id, runs=runs, warmup=warmup, top=top,
+        deep=deep, int8_build=int8_build,
+        analyze_warmup=analyze_warmup, cold_start=cold_start,
+        memory=memory, cold_start_runs=cold_start_runs,
+        quant_samples=quant_samples,
+        task=task,
+        seq_len=seq_len,
+        strict_output=_resolve_strict(ctx, strict_output),
+    )
 
 @cli.command()
 @click.argument('build_id')
@@ -231,7 +291,12 @@ def profile(build_id, runs, warmup, top, deep, int8_build, analyze_warmup, cold_
 @click.option('--warmup', default=10, type=int)
 @click.option('--compute-unit', default='all', type=click.Choice(['all', 'cpu', 'gpu']))
 @click.option('--ci', is_flag=True)
-def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup, compute_unit, ci):
+# --- PATCH: task + strict-output forwarded ---
+@click.option('--task', default=None,
+              type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
+@click.option('--strict-output', 'strict_output', is_flag=True, default=False)
+def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
+             compute_unit, ci, task, strict_output):
     """Validate build against constraints (CI-ready)."""
     from .commands.validate import validate as validate_cmd
     ctx = click.get_current_context()
@@ -246,6 +311,8 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
         warmup=warmup,
         compute_unit=compute_unit,
         ci=ci,
+        task=task,
+        strict_output=_resolve_strict(ctx, strict_output),
     )
 
 @cli.command()
@@ -263,7 +330,11 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
 @click.option('--warmup', default=20, type=int)
 @click.option('--json', 'as_json', is_flag=True)
 @click.option('--ci', is_flag=True)
-def compare(baseline_id, candidate_id, threshold, size_threshold, metric, compute_unit, runs, warmup, as_json, ci):
+# --- PATCH: task forwarded ---
+@click.option('--task', default=None,
+              type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
+def compare(baseline_id, candidate_id, threshold, size_threshold, metric,
+            compute_unit, runs, warmup, as_json, ci, task):
     """Compare two builds and detect regressions in latency and model size. Supports CoreML and TFLite."""
     from .commands.compare import compare as compare_cmd
     ctx = click.get_current_context()
@@ -279,6 +350,7 @@ def compare(baseline_id, candidate_id, threshold, size_threshold, metric, comput
         warmup=warmup,
         as_json=as_json,
         ci=ci,
+        task=task,
     )
 
 

@@ -77,6 +77,8 @@ Catch latency AND size regressions before they reach production.
 | Automated p50/p95/p99 benchmarking | Manual | Built-in |
 | CI fails on latency regression | Not native | `mlbuild ci-check` |
 | CI fails on model size regression | Not native | `--size-threshold` |
+| Task-aware synthetic inputs | No | **Auto-detected** |
+| NLP multi-seq-len benchmarking | No | **Built-in** |
 | Quantization tradeoff analysis | No | `mlbuild compare-quantization` |
 | Performance reports | No | `mlbuild report` |
 | S3-compatible remote storage | No | Built-in |
@@ -116,8 +118,11 @@ mlbuild build --model model.onnx --target apple_m1 --quantize fp16
 mlbuild import --model model.tflite --target android_arm64
 mlbuild import --model model.mlpackage --target apple_m1 --quantize fp16
 
-# 2. Benchmark (automatic p50/p95/p99)
+# 2. Benchmark (automatic p50/p95/p99, task auto-detected)
 mlbuild benchmark <build-id>
+
+# 2b. Override task detection explicitly
+mlbuild benchmark <build-id> --task nlp
 
 # 3. Validate SLAs
 mlbuild validate <build-id> --max-latency 10 --max-p95 15 --ci
@@ -389,6 +394,112 @@ mlbuild sync
 
 ---
 
+## Task-Aware Benchmarking
+
+MLBuild automatically detects what kind of model you're benchmarking — vision, NLP, or audio — and generates semantically correct synthetic inputs for it. No dummy zero arrays, no manual shape specification.
+
+### Automatic Task Detection
+
+Detection runs through three tiers in order of confidence:
+
+| Tier | Method | Formats | Confidence | CLI Behavior |
+|------|--------|---------|------------|--------------|
+| **Graph** | Op/layer analysis (`Conv`, `Attention`, `STFT`, etc.) | ONNX, CoreML NN | High | Silent |
+| **Name** | Tensor name heuristics (`input_ids`, `pixel_values`, `mel`) | All | Medium | Warning |
+| **Shape** | Dtype + rank heuristics (rank-4 float = vision, rank-2 int = NLP) | All | Low | Warning + zeros fallback |
+
+```bash
+# High confidence — silent, correct inputs generated automatically
+mlbuild benchmark <build-id>
+
+# Medium confidence — warning printed, benchmark proceeds
+# ⚠  Task auto-detected as 'nlp' (medium confidence)
+#    If incorrect, re-run with: --task vision|nlp|audio
+mlbuild benchmark <build-id>
+
+# Low confidence or unknown — zeros used as safe fallback
+# ⚠  Task could not be detected — running with zero tensors
+#    Specify task explicitly: --task vision|nlp|audio
+mlbuild benchmark <build-id>
+```
+
+### Override with `--task`
+
+If auto-detection gets it wrong, pass `--task` explicitly. This bypasses all detection logic entirely and is the recommended approach for audio models, which are always considered low-confidence by the shape heuristic.
+
+```bash
+mlbuild benchmark <build-id> --task vision
+mlbuild benchmark <build-id> --task nlp
+mlbuild benchmark <build-id> --task audio
+
+mlbuild profile  <build-id> --task nlp
+mlbuild validate <build-id> --task vision --strict-output
+```
+
+### Task-Specific Synthetic Inputs
+
+Each task gets semantically correct inputs rather than zeros.
+
+| Task | Inputs Generated |
+|------|-----------------|
+| **Vision** | Float32 image tensor, NCHW layout, spatial dims resolved to 224×224 |
+| **NLP** | `int64` token IDs (random vocab up to 30k), `int64` attention mask (all ones), token type IDs |
+| **Audio** | Float32 waveform `[-1, 1]` or log-mel spectrogram — role inferred from tensor name/shape |
+| **Unknown** | Zero tensors — safe fallback that never blocks CI |
+
+Dynamic dimensions (`-1`, `None`) are resolved using task-appropriate defaults. Concrete dimensions are always preserved as-is.
+
+### NLP Multi-Sequence Benchmarking
+
+NLP models are benchmarked across a sequence length ladder by default, giving you a full latency curve rather than a single point. This is essential for understanding how your model scales with context length.
+
+```bash
+# Default ladder: [16, 64, 128, 256]
+mlbuild benchmark <build-id> --task nlp
+
+# seq_len=16   p50=1.2ms  p95=1.4ms
+# seq_len=64   p50=2.1ms  p95=2.4ms
+# seq_len=128  p50=3.8ms  p95=4.2ms
+# seq_len=256  p50=7.1ms  p95=8.0ms
+
+# Clip to your model's actual max sequence length
+mlbuild benchmark <build-id> --task nlp --seq-len 128
+# Ladder: [16, 64, 128]
+
+# Model with non-standard max (appended to ladder as extra benchmark point)
+mlbuild benchmark <build-id> --task nlp --seq-len 200
+# Ladder: [16, 64, 128, 200]
+```
+
+### Strict Output Validation
+
+After inference, MLBuild validates model outputs against expectations for the detected task. In soft mode (default) issues are reported as warnings without blocking CI. Use `--strict-output` to fail on any anomaly.
+
+```bash
+# Soft mode (default) — warns but proceeds
+mlbuild benchmark <build-id> --task nlp
+
+# Strict mode — exits non-zero on output anomaly
+mlbuild benchmark <build-id> --task nlp --strict-output
+mlbuild validate  <build-id> --task vision --strict-output
+
+# Global strict mode — applies to all commands in the invocation
+mlbuild --strict-output benchmark <build-id> --task nlp
+```
+
+**Checks run on outputs:**
+
+| Check | Tasks | Strict mode promotes to FAIL |
+|-------|-------|------------------------------|
+| NaN / Inf detection | All | Always fails regardless of mode |
+| All-zeros output | All | Yes |
+| Zero logit variance | Vision, NLP | Yes |
+| Bounding box shape `[B, N, 4+]` | Vision | Yes |
+| CTC output shape `[B, T, vocab]` | Audio | Yes |
+| Box / score count alignment | Vision | Yes |
+
+---
+
 ## Quantization Workflow
 
 A common workflow for mobile deployment:
@@ -444,8 +555,9 @@ Training Phase
 
 Production Phase
 ├── Model Building:         MLBuild build
-├── Model Importing:        MLBuild import      ← pre-built TFLite / CoreML
-├── Performance Validation: MLBuild ci-check    ← regression gate
+├── Model Importing:        MLBuild import          ← pre-built TFLite / CoreML
+├── Task Detection:         MLBuild (automatic)     ← vision / nlp / audio
+├── Performance Validation: MLBuild ci-check        ← regression gate
 ├── Quantization Analysis:  MLBuild compare-quantization
 ├── Reporting:              MLBuild report
 └── Deployment:             GitHub Actions / K8s
@@ -472,7 +584,16 @@ build_id = sha256(source_hash + config_hash + env_fingerprint)
 # Outlier trimming (top/bottom 5%)
 ```
 
-### 3. Dual Regression Detection
+### 3. Task-Aware Input Generation
+
+```python
+# Three-tier detection: graph ops → tensor names → shapes
+# Task-specific synthetic inputs (never zeros for known tasks)
+# NLP: multi-seq-len ladder [16, 64, 128, 256]
+# Post-inference output validation with configurable strictness
+```
+
+### 4. Dual Regression Detection
 
 ```python
 # Independent thresholds for latency and size
@@ -481,7 +602,7 @@ size_regression    = size_change_pct    > size_threshold
 regression_detected = latency_regression or size_regression
 ```
 
-### 4. Quantization Tradeoff Scoring
+### 5. Quantization Tradeoff Scoring
 
 ```python
 score = (size_reduction% + latency_improvement%) / 2 - accuracy_loss% * 2
@@ -504,6 +625,13 @@ score = (size_reduction% + latency_improvement%) / 2 - accuracy_loss% * 2
 - Format/target compatibility enforcement
 - Imported builds tracked with `[imported]` badge in `mlbuild log`
 - Full MLBuild toolchain available immediately after import
+
+### Task-Aware Benchmarking
+- Three-tier automatic task detection (graph ops → tensor names → shapes)
+- Task-specific synthetic inputs: real image tensors, token IDs + attention masks, waveforms/spectrograms
+- NLP multi-sequence-length benchmarking ladder `[16, 64, 128, 256]`
+- Configurable `--task` override for explicit control
+- Post-inference output validation with soft/strict modes (`--strict-output`)
 
 ### Performance Validation
 - Automated p50/p95/p99 benchmarking
@@ -582,6 +710,10 @@ mlbuild/
 │   │   ├── errors.py                     # Error types
 │   │   ├── format_detection.py           # Format detection + target validation
 │   │   ├── hash.py                       # Deterministic artifact hashing
+│   │   ├── task_detection.py             # Three-tier task detection
+│   │   ├── task_inputs.py                # Task-aware synthetic input generation
+│   │   ├── task_validation.py            # Post-inference output validation
+│   │   ├── tasks.py                      # Task types + arbitration + output schemas
 │   │   ├── types.py                      # Core data types (Build, Benchmark)
 │   │   └── ...
 │   ├── experiments/                      # Experiment + run tracking
@@ -589,7 +721,7 @@ mlbuild/
 │   ├── profiling/                        # Layer-by-layer profiling + cold start
 │   ├── registry/
 │   │   ├── local.py                      # SQLite registry (WAL mode)
-│   │   └── schema.py                     # Schema + migrations (v5)
+│   │   └── schema.py                     # Schema + migrations (v6)
 │   ├── storage/                          # S3-compatible remote storage
 │   └── visualization/                    # Chart generation
 ├── tests/
@@ -606,6 +738,7 @@ mlbuild/
 | Training experiments | ✓ | — | ✓ | — |
 | Data versioning | — | ✓ | — | — |
 | Inference benchmarking | Manual | No | No | **Automated** |
+| Task-aware synthetic inputs | No | No | No | **Auto-detected** |
 | CI regression gate | No | No | No | **Built-in** |
 | Size regression detection | No | No | No | **Built-in** |
 | Quantization analysis | No | No | No | **Built-in** |

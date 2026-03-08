@@ -69,6 +69,42 @@ def _get_sibling_builds(registry: LocalRegistry, build) -> list:
 
 
 # ============================================================
+# Task helpers
+# ============================================================
+
+def _display_task(build) -> str:
+    """Return task_type for display, falling back to 'unknown' for pre-v6 NULL rows."""
+    return getattr(build, "task_type", None) or "unknown"
+
+
+def _describe_inputs(build) -> str:
+    """
+    Return a human-readable description of the synthetic inputs used for
+    benchmarking. Uses task_inputs.describe_inputs() when available;
+    falls back to a static string per task.
+    """
+    task = _display_task(build)
+    try:
+        from ...core.task_inputs import TaskInputFactory, ModelInfo as InputModelInfo
+        from ...core.task_detection import TaskType
+        info = InputModelInfo(
+            op_types=[], input_shapes={}, input_names=[], metadata={}, num_nodes=0,
+        )
+        factory = TaskInputFactory(info)
+        resolved = TaskType(task) if task in [t.value for t in TaskType] else TaskType.UNKNOWN
+        return factory.describe_inputs(resolved)
+    except Exception:
+        fallbacks = {
+            "vision":     "Synthetic 224×224 RGB image (float32, NCHW)",
+            "nlp":        "Synthetic token sequence (seq_len=128, int32)",
+            "audio":      "Synthetic waveform (16 kHz, 1s) or mel spectrogram (80 bins)",
+            "multimodal": "Synthetic mixed inputs (image + token sequence)",
+            "unknown":    "Synthetic zero-valued tensors (task unknown)",
+        }
+        return fallbacks.get(task, "Synthetic inputs")
+
+
+# ============================================================
 # HTML generation
 # ============================================================
 
@@ -84,6 +120,8 @@ def _render_html(build, benchmarks: list, siblings: list) -> str:
     size_mb = float(build.size_mb)
     created = build.created_at.strftime("%Y-%m-%d %H:%M UTC") if build.created_at else "—"
     build_short = build.build_id[:16]
+    task_value = _display_task(build)
+    input_desc = _describe_inputs(build)
 
     # Latest benchmark
     bench = benchmarks[0] if benchmarks else None
@@ -332,6 +370,7 @@ def _render_html(build, benchmarks: list, siblings: list) -> str:
   .badge-format  {{ background: #1a2540; color: var(--accent2); border: 1px solid #2a3f6f; }}
   .badge-quant   {{ background: #1a2d20; color: var(--green);   border: 1px solid #2a4f35; }}
   .badge-device  {{ background: #2a2010; color: var(--yellow);  border: 1px solid #4f3a10; }}
+  .badge-task    {{ background: #2a1a40; color: #c084fc;        border: 1px solid #4f2a6f; }}
 
   .header-right {{
     text-align: right;
@@ -621,6 +660,7 @@ def _render_html(build, benchmarks: list, siblings: list) -> str:
       <span class="badge badge-format">{(build.format or 'unknown').upper()}</span>
       <span class="badge badge-quant">{quant_type.upper()}</span>
       <span class="badge badge-device">{build.target_device or 'unknown'}</span>
+      <span class="badge badge-task">{task_value}</span>
     </div>
   </div>
   <div class="header-right">
@@ -658,6 +698,10 @@ def _render_html(build, benchmarks: list, siblings: list) -> str:
       <div class="info-val">{build.target_device or '—'}</div>
       <div class="info-key">Quantization</div>
       <div class="info-val">{quant_type.upper()}</div>
+      <div class="info-key">Task</div>
+      <div class="info-val">{task_value}</div>
+      <div class="info-key">Benchmark Inputs</div>
+      <div class="info-val">{input_desc}</div>
       <div class="info-key">Size</div>
       <div class="info-val">{size_mb:.4f} MB ({int(size_mb * 1024 * 1024):,} bytes)</div>
       <div class="info-key">Created</div>
@@ -769,6 +813,8 @@ def report(build_id: str, output: str, open_browser: bool, fmt: str):
             sys.exit(2)
 
         console.print(f"\n[bold]Generating report[/bold] for {build.name or build.build_id[:16]}...")
+        console.print(f"  Task:   {_display_task(build)}")
+        console.print(f"  Inputs: {_describe_inputs(build)}")
 
         # ── Fetch data ─────────────────────────────────────────
         benchmarks = _get_benchmarks(registry, build.build_id)
