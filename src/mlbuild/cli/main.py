@@ -454,6 +454,9 @@ cli.add_command(optimize_command)
 from .commands.explore import explore as explore_command
 cli.add_command(explore_command)
 
+from .commands.ci import ci as ci_command
+cli.add_command(ci_command)
+
 from mlbuild.cli.commands.accuracy import accuracy_command
 cli.add_command(accuracy_command)
 

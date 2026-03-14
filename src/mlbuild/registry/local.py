@@ -689,6 +689,19 @@ class LocalRegistry:
 
             return self.get_build(row['build_id'])
 
+    def resolve_tag(self, tag_or_id: str):
+        """
+        Resolve a tag name or build ID prefix to a Build.
+
+        Tries tag lookup first, then falls back to resolve_build().
+        Returns (build, tag_name) where tag_name is None if resolved by ID.
+        """
+        build = self.get_build_by_tag(tag_or_id)
+        if build is not None:
+            return build, tag_or_id
+        build = self.resolve_build(tag_or_id)
+        return build, None
+
     # ------------------------------------------------------------
     # Row Mapping
     # ------------------------------------------------------------

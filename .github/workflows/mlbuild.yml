@@ -1,0 +1,69 @@
+name: MLBuild CI
+
+on:
+  pull_request:
+    paths:
+      - "models/**"
+      - "training/**"
+      - "*.onnx"
+
+jobs:
+  mlbuild:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install MLBuild
+        run: pip install mlbuild
+
+      - name: Run MLBuild CI
+        run: |
+          mlbuild ci \
+            --model models/mobilenet.onnx \
+            --baseline main-mobilenet \
+            --latency-regression 15 \
+            --size-regression 10
+
+      - name: Upload CI report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mlbuild-report
+          path: .mlbuild/ci_report.json
+
+      - name: Post PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            if (!fs.existsSync('.mlbuild/ci_report.json')) { return }
+            const raw = JSON.parse(fs.readFileSync('.mlbuild/ci_report.json', 'utf8'))
+            const result = raw.result === 'pass' ? '✅ PASS' : '❌ FAIL'
+            const latDelta = raw.delta?.latency_pct != null ? `${raw.delta.latency_pct > 0 ? '+' : ''}${raw.delta.latency_pct.toFixed(1)}%` : '—'
+            const sizeDelta = raw.delta?.size_pct != null ? `${raw.delta.size_pct > 0 ? '+' : ''}${raw.delta.size_pct.toFixed(1)}%` : '—'
+            const body = [
+              `## 🤖 MLBuild CI — ${result}`,
+              '',
+              `**Model:** \`${raw.model}\``,
+              `**Baseline:** \`${raw.baseline?.build_id?.slice(0,16)}\`${raw.baseline?.tag ? ` (\`${raw.baseline.tag}\`)` : ''}`,
+              `**Candidate:** \`${raw.candidate?.build_id?.slice(0,16)}\` (${raw.candidate?.variant})`,
+              '',
+              '| Metric | Baseline | Candidate | Delta |',
+              '|--------|----------|-----------|-------|',
+              `| Latency (p50) | ${raw.baseline?.latency_ms != null ? raw.baseline.latency_ms.toFixed(2)+'ms' : '—'} | ${raw.candidate?.latency_ms != null ? raw.candidate.latency_ms.toFixed(2)+'ms' : '—'} | ${latDelta} |`,
+              `| Size | ${raw.baseline?.size_mb != null ? raw.baseline.size_mb.toFixed(2)+' MB' : '—'} | ${raw.candidate?.size_mb != null ? raw.candidate.size_mb.toFixed(2)+' MB' : '—'} | ${sizeDelta} |`,
+              ...(raw.violations?.length ? ['', '**Violations:**', ...raw.violations.map(v => `- ${v.message}`)] : []),
+            ].join('\n')
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            })

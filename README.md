@@ -54,15 +54,29 @@ Size:     6MB  --> 10MB   (67% larger)
 ## The Solution
 
 ```bash
+# Tag your main branch baseline once
+mlbuild tag create <build_id> main-mobilenet
+
 # Add one step to your CI pipeline
-mlbuild build --model model.onnx --target apple_m1
-mlbuild ci-check $BASELINE_ID $CANDIDATE_ID
+mlbuild ci --model model.onnx --baseline main-mobilenet
 
 # Output:
-# ⚠ REGRESSION DETECTED
-#   • latency +12.3% > 10.0% threshold
-#   • size +8.1% > 5.0% threshold
-# Exit code: 1 — PR blocked
+# MLBuild CI Report
+# ──────────────────────────────────────────────────
+# Model:     mobilenet
+# Baseline:  3f36810e (main-mobilenet)
+# Candidate: b8aa1ef6 (fp16)
+#
+#                      Baseline     Candidate       Delta
+# Latency (p50)         2.49 ms       0.74 ms     -70.27%
+# Size                 13.39 MB       6.74 MB     -49.64%
+#
+# Result: ✓ PASS
+# Exit code: 0
+
+# Or use the low-level gate directly
+mlbuild ci-check $BASELINE_ID $CANDIDATE_ID --latency-threshold 10
+# Exit code: 1 — PR blocked on regression
 ```
 
 Catch latency AND size regressions before they reach production.
@@ -93,7 +107,8 @@ MLBuild is the missing on-device performance layer in your ML CI/CD stack.
 ┌─────────────────────────────▼───────────────────────────────────┐
 │  Regression Gate                     MLBuild CI                 │
 │  ✕  Bad performance → blocks deployment                        │
-│  └── CI Performance Gate ─────────── mlbuild ci-check          │
+│  ├── CI Performance Gate ─────────── mlbuild ci-check          │
+│  └── Full CI Orchestration ───────── mlbuild ci               │
 └─────────────────────────────┬───────────────────────────────────┘
                               │
 ┌─────────────────────────────▼───────────────────────────────────┐
@@ -168,7 +183,10 @@ mlbuild accuracy <baseline-id> <candidate-id>
 # 5. Validate SLAs (performance + accuracy in one command)
 mlbuild validate <build-id> --max-latency 10 --dataset ./imagenet-mini/
 
-# 6. Compare vs baseline (latency + size + accuracy)
+# 6. Run full CI check against registered baseline
+mlbuild ci --model model.onnx --baseline main-mobilenet
+
+# 6b. Or use low-level compare
 mlbuild compare baseline candidate --threshold 5 --check-accuracy --ci
 
 # 7. View full optimization lineage
@@ -184,22 +202,26 @@ mlbuild tag create <build-id> production
 ### GitHub Actions Integration
 
 ```yaml
-- name: Performance Validation
+- name: MLBuild CI
   run: |
-    pip install "mlbuild[tflite,s3]"
+    pip install mlbuild
 
-    # Build model
-    mlbuild build --model models/model.onnx --target android_arm64
-    BUILD_ID=$(mlbuild log --limit 1 --json | jq -r '.[0].build_id')
+    # Full CI check — explore, compare, report in one command
+    mlbuild ci \
+      --model models/mobilenet.onnx \
+      --baseline main-mobilenet \
+      --latency-regression 15 \
+      --size-regression 10
 
-    # Gate: block PR if latency or size regresses
-    mlbuild ci-check $BASELINE_ID $BUILD_ID \
-      --latency-threshold 10 \
-      --size-threshold 5 \
-      --json
+- name: Upload CI report
+  uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: mlbuild-report
+    path: .mlbuild/ci_report.json
 ```
 
-See `.github/workflows/examples/` for complete examples.
+See `.github/workflows/mlbuild.yml` for a complete example with PR comment posting.
 
 ---
 
@@ -472,6 +494,111 @@ mlbuild ci-check baseline candidate --json
 
 ---
 
+#### CI Orchestration
+
+Full CI check in one command — resolves baseline, explores variants, compares, enforces thresholds, and writes a structured report.
+
+```bash
+# Run full CI check against a tagged baseline
+mlbuild ci --model mobilenet.onnx --baseline main-mobilenet
+
+# Use an existing build (skips explore — useful when builds happen earlier in pipeline)
+mlbuild ci --build <build_id> --baseline main-mobilenet
+
+# With absolute budgets (independent of baseline)
+mlbuild ci --model mobilenet.onnx --baseline main-mobilenet \
+  --latency-budget 3.0 \
+  --size-budget 10.0
+
+# With accuracy gate
+mlbuild ci --model mobilenet.onnx --baseline main-mobilenet \
+  --dataset ./imagenet-mini/ \
+  --cosine-threshold 0.99
+
+# JSON output (for dashboards and GitHub bots)
+mlbuild ci --build <build_id> --baseline main-mobilenet --json
+
+# Fail if baseline tag not found (strict CI)
+mlbuild ci --model mobilenet.onnx --baseline main-mobilenet --fail-on-missing-baseline
+```
+
+**Tagging baselines:**
+```bash
+# Tag a build as the main branch baseline
+mlbuild tag create <build_id> main-mobilenet
+
+# --baseline accepts tag names or build ID prefixes
+mlbuild ci --baseline main-mobilenet   # tag lookup
+mlbuild ci --baseline 3f36810e         # build ID prefix
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--model` | ONNX model path (runs explore) | — |
+| `--build` | Existing build ID (skips explore) | — |
+| `--baseline` | Tag name or build ID | required |
+| `--target` | Device target for explore | auto |
+| `--latency-regression` | Max latency regression % | 10.0 |
+| `--size-regression` | Max size regression % | 5.0 |
+| `--latency-budget` | Hard latency cap in ms | none |
+| `--size-budget` | Hard size cap in MB | none |
+| `--dataset` | Calibration data for accuracy check | none |
+| `--cosine-threshold` | Min cosine similarity | 0.99 |
+| `--top1-threshold` | Min top-1 agreement | 0.99 |
+| `--fail-on-missing-baseline` | Exit 1 if baseline not found | false |
+| `--json` | Print JSON report to stdout | false |
+
+**CI Report** — always written to `.mlbuild/ci_report.json`:
+
+```json
+{
+  "model": "mobilenet.onnx",
+  "baseline": {
+    "tag": "main-mobilenet",
+    "build_id": "3f36810e...",
+    "latency_ms": 2.49,
+    "size_mb": 13.39
+  },
+  "candidate": {
+    "build_id": "b8aa1ef6...",
+    "variant": "fp16",
+    "parent_build_id": "3f36810e...",
+    "latency_ms": 0.74,
+    "size_mb": 6.74
+  },
+  "delta": { "latency_pct": -70.27, "size_pct": -49.64 },
+  "thresholds": {
+    "latency_regression_pct": 10.0,
+    "size_regression_pct": 5.0,
+    "latency_budget_ms": null,
+    "size_budget_mb": null
+  },
+  "result": "pass",
+  "violations": []
+}
+```
+
+The report always stores `baseline.build_id` — even if the tag is later repointed, the report preserves exactly what was compared.
+
+**Exit codes:** `0` = pass or skipped, `1` = regression/failure, `2` = error.
+
+**Configuration** via `.mlbuild/config.toml`:
+```toml
+[ci]
+latency_regression_pct = 10
+size_regression_pct = 5
+latency_budget_ms = 3.0
+size_budget_mb = 10.0
+
+[ci.accuracy]
+cosine_threshold = 0.99
+top1_threshold = 0.99
+```
+
+---
+
 #### Quantization Tradeoff Analysis
 
 ```bash
@@ -715,16 +842,22 @@ mlbuild tag create <final_id> production-v2
 ## CI/CD Regression Gate
 
 ```bash
-# In your CI pipeline:
+# Full CI orchestration (recommended)
+mlbuild ci --model mobilenet.onnx --baseline main-mobilenet
+echo "Exit: $?"   # 0 = pass, 1 = fail, 2 = error
+
+# Low-level build-to-build comparison
 mlbuild ci-check $BASELINE_ID $CANDIDATE_ID
 echo "Exit: $?"   # 0 = pass, 1 = regression, 2 = error
 
-# With JSON output for log parsing:
-mlbuild ci-check $BASELINE_ID $CANDIDATE_ID --json
+# JSON output for dashboards and PR bots
+mlbuild ci --build $BUILD_ID --baseline main-mobilenet --json
 # {
-#   "regression_detected": false,
-#   "change": { "p50": -63.75, "size": -42.86 },
-#   "thresholds": { "latency_pct": 10.0, "size_pct": 5.0 }
+#   "result": "pass",
+#   "baseline": { "tag": "main-mobilenet", "build_id": "3f36810e...", "latency_ms": 2.49 },
+#   "candidate": { "build_id": "b8aa1ef6...", "variant": "fp16", "latency_ms": 0.74 },
+#   "delta": { "latency_pct": -70.27, "size_pct": -49.64 },
+#   "violations": []
 # }
 ```
 
@@ -901,10 +1034,18 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - Integrity verification (SHA-256)
 
 ### CI/CD Integration
-- `mlbuild ci-check` — dedicated regression gate
-- Exit codes: 0 (pass) / 1 (regression) / 2 (error)
-- JSON output for log parsing
-- GitHub Actions examples
+- `mlbuild ci` — full CI orchestration (explore + compare + threshold enforcement + JSON report)
+- Tag-based baseline resolution — `mlbuild tag create <id> main-mobilenet`
+- Baseline immutability — report stores both tag name and build ID for reproducibility
+- Baseline benchmark guard — auto-benchmarks baseline if no cached latency
+- Relative regression thresholds (`--latency-regression`, `--size-regression`)
+- Absolute budget constraints (`--latency-budget`, `--size-budget`) independent of baseline
+- Accuracy gate via `--dataset` — cosine similarity + top-1 agreement
+- `--fail-on-missing-baseline` — strict mode for production pipelines
+- Structured JSON report at `.mlbuild/ci_report.json` — readable by GitHub bots, dashboards, Slack
+- `mlbuild ci-check` — low-level build-to-build regression gate
+- Exit codes: 0 (pass/skip) / 1 (regression/fail) / 2 (error)
+- GitHub Actions workflow with artifact upload and PR comment posting (`.github/workflows/mlbuild.yml`)
 
 ---
 
@@ -916,6 +1057,7 @@ mlbuild/
 │   ├── cli/
 │   │   ├── commands/
 │   │   │   ├── accuracy.py               # mlbuild accuracy
+│   │   │   ├── ci.py                     # mlbuild ci
 │   │   │   ├── benchmark.py              # mlbuild benchmark
 │   │   │   ├── build.py                  # mlbuild build
 │   │   │   ├── compare.py                # mlbuild compare + ci-check
@@ -947,6 +1089,10 @@ mlbuild/
 │   ├── benchmark/                        # Benchmark runner + stats
 │   ├── core/
 │   │   ├── accuracy/
+│   │   ├── ci/
+│   │   │   ├── reporter.py               # CIReport + text/JSON/markdown formatters
+│   │   │   ├── runner.py                 # CIRunner orchestration
+│   │   │   └── thresholds.py             # ThresholdConfig + violation evaluation
 │   │   │   ├── calibration.py            # CalibrationLoader (images/npy/npz)
 │   │   │   ├── checker.py                # run_accuracy_check()
 │   │   │   ├── config.py                 # AccuracyConfig, AccuracyResult
@@ -1037,22 +1183,15 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Roadmap
 
-### Phase 1 — CI Integration *(next)*
-- `mlbuild ci` — full CI orchestration command (explore + compare + validate + report in one)
-- Tag-based baseline resolution (`mlbuild tag create main-mobilenet --build <id>`)
-- Structured JSON CI report (`.mlbuild/ci_report.json`) for GitHub bots and dashboards
-- PR comment integration via GitHub Actions
-- Absolute performance budgets (`--latency-budget-ms`, `--size-budget-mb`)
-
-### Phase 2 — Device-Connected Benchmarking
+### Phase 1 — Device-Connected Benchmarking *(next)*
 - Android ADB bridge — benchmark on connected Android devices without Android Studio
 - Xcode Instruments integration — real iPhone hardware profiling
 
-### Phase 3 — More Backends
+### Phase 2 — More Backends
 - TensorRT — NVIDIA GPU inference
 - Qualcomm QNN — Snapdragon NPU
 
-### Phase 4 — Cloud Benchmarking
+### Phase 3 — Cloud Benchmarking
 - Remote benchmark execution on cloud hardware
 
 ---
