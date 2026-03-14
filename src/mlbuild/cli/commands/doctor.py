@@ -33,12 +33,20 @@ logger = logging.getLogger("mlbuild.doctor")
 REQUIRED_PYTHON = (3, 9)
 OPTIONAL_TOOLS = ["xcodebuild"]
 
-ML_FRAMEWORKS = [
-    "coremltools",
+# Required on all platforms
+REQUIRED_FRAMEWORKS = [
     "onnx",
+]
+
+# Optional — only available on macOS
+MACOS_FRAMEWORKS = [
+    "coremltools",
     "torch",
     "onnxruntime",
 ]
+
+# All frameworks to check
+ML_FRAMEWORKS = REQUIRED_FRAMEWORKS + MACOS_FRAMEWORKS
 
 # -------------------------------
 # Helpers
@@ -126,9 +134,13 @@ def doctor(as_json: bool, soft: bool):
     # ML Frameworks
     framework_results = check_ml_frameworks(ML_FRAMEWORKS)
     results["checks"]["ml_frameworks"] = framework_results
+    import platform as _plat
     for fw, data in framework_results.items():
         if not data["installed"]:
-            failures.append(f"Missing required framework: {fw}")
+            if fw in REQUIRED_FRAMEWORKS:
+                failures.append(f"Missing required framework: {fw}")
+            elif _plat.system() == "Darwin" and fw in MACOS_FRAMEWORKS:
+                failures.append(f"Missing macOS framework: {fw} (install with pip install mlbuild[coreml])")
 
     # Platform
     results["platform"] = {
@@ -183,13 +195,24 @@ def doctor(as_json: bool, soft: bool):
         console.print(f"{py_status} Python {py_info.major}.{py_info.minor}.{py_info.micro}")
 
         # ML Frameworks
+        import platform as _plat2
         console.print("\n[bold]ML Frameworks:[/bold]")
         for fw, data in framework_results.items():
-            status = "[green]✓[/green]" if data["installed"] else "[red]✗[/red]"
-            version = data.get("version", "unknown")
+            installed = data["installed"]
+            version = data.get("version", "not installed")
             gpu = data.get("gpu", None)
-            gpu_str = f", GPU available: {gpu}" if gpu is not None else ""
-            console.print(f"  {status} {fw} {version}{gpu_str}")
+            gpu_str = f", GPU: {gpu}" if gpu is not None else ""
+            is_optional = fw in MACOS_FRAMEWORKS
+            if installed:
+                status = "[green]✓[/green]"
+                label = ""
+            elif is_optional and _plat2.system() != "Darwin":
+                status = "[dim]—[/dim]"
+                label = " [dim](macOS only)[/dim]"
+            else:
+                status = "[red]✗[/red]"
+                label = ""
+            console.print(f"  {status} {fw} {version}{gpu_str}{label}")
 
         # Platform
         console.print("\n[bold]Platform:[/bold]")
