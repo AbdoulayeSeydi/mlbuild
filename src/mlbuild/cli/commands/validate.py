@@ -89,6 +89,11 @@ def _benchmark_build(build, runs, warmup, compute_unit):
 @click.option('--warmup', default=10, type=int, help='Warmup runs')
 @click.option('--compute-unit', default='all', type=click.Choice(['all', 'cpu', 'gpu']))
 @click.option('--ci', is_flag=True, help='CI mode (suppress output, exit codes only)')
+@click.option('--dataset', default=None, type=click.Path(exists=True, path_type=Path), help='Dataset for accuracy check.')
+@click.option('--baseline-id', default=None, help='Baseline build ID (default: root build).')
+@click.option('--cosine-threshold', default=0.99, type=float, show_default=True)
+@click.option('--top1-threshold', default=0.99, type=float, show_default=True)
+@click.option('--accuracy-samples', default=200, type=int, show_default=True)
 # --- PATCH: --task flag ---
 @click.option(
     '--task',
@@ -116,6 +121,11 @@ def validate(
     ci: bool,
     task: str,
     strict_output: bool,
+    dataset: Path = None,
+    baseline_id: str = None,
+    cosine_threshold: float = 0.99,
+    top1_threshold: float = 0.99,
+    accuracy_samples: int = 200,
 ):
     """
     Validate build against performance constraints.
@@ -233,11 +243,51 @@ def validate(
                 console.print(f"[red]Benchmark failed: {e}[/red]")
             sys.exit(1)
 
+    # Accuracy check (only if --dataset provided)
+    accuracy_result = None
+    if dataset is not None:
+        from ...validation.accuracy_validator import AccuracyValidator
+
+        acc_baseline = None
+        if baseline_id:
+            acc_baseline = registry.resolve_build(baseline_id)
+            if acc_baseline is None and not ci:
+                console.print(f"[yellow]Warning: baseline not found, skipping accuracy[/yellow]")
+        elif build.root_build_id and build.root_build_id != build.build_id:
+            acc_baseline = registry.resolve_build(build.root_build_id)
+
+        if acc_baseline is None:
+            if not ci:
+                console.print("[dim]Accuracy check skipped — build is root baseline[/dim]")
+        else:
+            if not ci:
+                console.print(f"[dim]Running accuracy check ({accuracy_samples} samples)...[/dim]\n")
+            validator = AccuracyValidator(
+                build=build,
+                baseline=acc_baseline,
+                dataset=dataset,
+                cosine_threshold=cosine_threshold,
+                top1_threshold=top1_threshold,
+                max_samples=accuracy_samples,
+                registry=registry,
+            )
+            accuracy_result = validator.validate()
+            if accuracy_result.skipped:
+                if not ci:
+                    console.print(f"[yellow]Accuracy check skipped: {accuracy_result.skip_reason}[/yellow]")
+            else:
+                for v in accuracy_result.violations:
+                    violations.append(v.as_violation_dict())
+
     # Report results
     if violations:
         _report_violations(violations, ci)
         sys.exit(1)
     else:
+        if not ci and accuracy_result and not accuracy_result.skipped:
+            cos = f"{accuracy_result.cosine_similarity:.4f}" if accuracy_result.cosine_similarity is not None else "—"
+            top1 = f"{accuracy_result.top1_agreement:.4f}" if accuracy_result.top1_agreement is not None else "—"
+            console.print(f"[dim]Accuracy: cosine={cos}  top1={top1}[/dim]")
         if ci:
             print("✓ All constraints passed")
         else:
@@ -269,7 +319,10 @@ def _report_violations(violations, ci_mode):
         actual_str = f"{v['actual']:.2f} {v['unit']}"
         over = v['actual'] - v['limit']
         over_pct = (over / v['limit']) * 100
-        violation_str = f"+{over:.2f} ({over_pct:.1f}% over)"
+        if not v['unit']:
+            violation_str = f"{over:+.4f} ({abs(over_pct):.1f}% below threshold)"
+        else:
+            violation_str = f"+{over:.2f} ({over_pct:.1f}% over)"
         table.add_row(v['constraint'], limit_str, actual_str, violation_str)
 
     console.print(table)

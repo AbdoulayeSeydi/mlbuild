@@ -8,6 +8,7 @@ from breaking the entire CLI.
 import click
 import os
 import sys
+from pathlib import Path
 
 # Suppress coremltools version warnings on startup
 _devnull = open(os.devnull, 'w')
@@ -129,11 +130,16 @@ def build(model, backend, target, name, quantize, notes):
 @click.option('--tag', default=None)
 @click.option('--date-from', default=None)
 @click.option('--date-to', default=None)
-# --- PATCH: --task filter forwarded from Step 11 ---
 @click.option('--task', default=None,
               type=click.Choice(['vision', 'nlp', 'audio', 'multimodal', 'unknown']))
+@click.option('--format', 'fmt', default=None,
+              type=click.Choice(['coreml', 'tflite']))
+@click.option('--roots-only', is_flag=True, default=False)
+@click.option('--source', default=None)
+@click.option('--tree', is_flag=True, default=False)
 def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes,
-        full_id, full_hashes, target, name, tag, date_from, date_to, task):
+        full_id, full_hashes, target, name, tag, date_from, date_to, task,
+        fmt, roots_only, source, tree):
     """Show build history."""
     from .commands.log import log as log_cmd
     ctx = click.get_current_context()
@@ -154,6 +160,10 @@ def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes,
         date_from=date_from,
         date_to=date_to,
         task=task,
+        fmt=fmt,
+        roots_only=roots_only,
+        source=source,
+        tree=tree,
     )
 
 
@@ -291,12 +301,18 @@ def profile(build_id, runs, warmup, top, deep, int8_build, analyze_warmup,
 @click.option('--warmup', default=10, type=int)
 @click.option('--compute-unit', default='all', type=click.Choice(['all', 'cpu', 'gpu']))
 @click.option('--ci', is_flag=True)
+@click.option('--dataset', default=None, type=click.Path(exists=True, path_type=Path))
+@click.option('--baseline-id', default=None)
+@click.option('--cosine-threshold', default=0.99, type=float)
+@click.option('--top1-threshold', default=0.99, type=float)
+@click.option('--accuracy-samples', default=200, type=int)
 # --- PATCH: task + strict-output forwarded ---
 @click.option('--task', default=None,
               type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
 @click.option('--strict-output', 'strict_output', is_flag=True, default=False)
 def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
-             compute_unit, ci, task, strict_output):
+             compute_unit, ci, dataset, baseline_id, cosine_threshold,
+             top1_threshold, accuracy_samples, task, strict_output):
     """Validate build against constraints (CI-ready)."""
     from .commands.validate import validate as validate_cmd
     ctx = click.get_current_context()
@@ -313,6 +329,11 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
         ci=ci,
         task=task,
         strict_output=_resolve_strict(ctx, strict_output),
+        dataset=dataset,
+        baseline_id=baseline_id,
+        cosine_threshold=cosine_threshold,
+        top1_threshold=top1_threshold,
+        accuracy_samples=accuracy_samples,
     )
 
 @cli.command()
@@ -333,12 +354,23 @@ def validate(build_id, max_latency, max_p95, max_memory, max_size, runs, warmup,
 # --- PATCH: task forwarded ---
 @click.option('--task', default=None,
               type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
+@click.option('--use-cached', is_flag=True, default=False,
+              help='Use cached benchmark results from registry instead of re-running.')
+@click.option('--check-accuracy', is_flag=True, default=False,
+              help='Run output divergence check after latency comparison.')
+@click.option('--accuracy-samples', default=32, type=int, show_default=True)
+@click.option('--accuracy-seed', default=42, type=int, show_default=True)
+@click.option('--cosine-threshold', default=0.99, type=float, show_default=True)
+@click.option('--top1-threshold', default=0.99, type=float, show_default=True)
+@click.option('--accuracy-mae-threshold', default=None, type=float)
 def compare(baseline_id, candidate_id, threshold, size_threshold, metric,
-            compute_unit, runs, warmup, as_json, ci, task):
+            compute_unit, runs, warmup, as_json, ci, task, use_cached,
+            check_accuracy, accuracy_samples, accuracy_seed,
+            cosine_threshold, top1_threshold, accuracy_mae_threshold):
     """Compare two builds and detect regressions in latency and model size. Supports CoreML and TFLite."""
     from .commands.compare import compare as compare_cmd
     ctx = click.get_current_context()
-    ctx.invoke(
+    exit_code = ctx.invoke(
         compare_cmd,
         baseline_id=baseline_id,
         candidate_id=candidate_id,
@@ -351,8 +383,15 @@ def compare(baseline_id, candidate_id, threshold, size_threshold, metric,
         as_json=as_json,
         ci=ci,
         task=task,
+        use_cached=use_cached,
+        check_accuracy=check_accuracy,
+        accuracy_samples=accuracy_samples,
+        accuracy_seed=accuracy_seed,
+        cosine_threshold=cosine_threshold,
+        top1_threshold=top1_threshold,
+        accuracy_mae_threshold=accuracy_mae_threshold,
     )
-
+    sys.exit(exit_code if exit_code is not None else 0)
 
 @cli.command()
 @click.option('--force', is_flag=True, help='Reinitialize even if already exists')
@@ -408,6 +447,15 @@ cli.add_command(experiment_group)
 
 from .commands.run import run as run_group
 cli.add_command(run_group)
+
+from .commands.optimize import optimize as optimize_command
+cli.add_command(optimize_command)
+
+from .commands.explore import explore as explore_command
+cli.add_command(explore_command)
+
+from mlbuild.cli.commands.accuracy import accuracy_command
+cli.add_command(accuracy_command)
 
 if __name__ == "__main__":
     cli()

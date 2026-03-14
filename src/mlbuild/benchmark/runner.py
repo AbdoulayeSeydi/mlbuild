@@ -28,6 +28,7 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Any
 
+from abc import ABC, abstractmethod
 import numpy as np
 
 try:
@@ -322,17 +323,48 @@ def detect_regression(
 
 
 # ==============================
-# Enterprise Benchmark Runner
+# Benchmark Runner Abstraction
 # ==============================
 
-class CoreMLBenchmarkRunner:
+class BenchmarkRunner(ABC):
+    """Abstract base class for all benchmark runners."""
 
     def __init__(
         self,
         model_path: Path,
-        compute_unit: ComputeUnit,
+        compute_unit: ComputeUnit = ComputeUnit.ALL,
         warmup_runs: int = 20,
-        benchmark_runs: int = 200,
+        benchmark_runs: int = 100,
+        seed: int = 42,
+        ci_mode: bool = False,
+    ):
+        # Note: no coremltools guard here — subclasses guard their own deps
+        self.model_path = Path(model_path)
+        self.compute_unit = compute_unit
+        self.warmup_runs = warmup_runs
+        self.benchmark_runs = benchmark_runs
+
+    @abstractmethod
+    def run(self, build_id: str) -> BenchmarkResult: ...
+
+    @abstractmethod
+    def get_input_spec(self) -> list: ...
+
+    @abstractmethod
+    def predict(self, inputs: dict) -> dict: ...
+
+# ==============================
+# Benchmark Runner
+# ==============================
+
+class CoreMLBenchmarkRunner(BenchmarkRunner):
+
+    def __init__(
+        self,
+        model_path: Path,
+        compute_unit: ComputeUnit = ComputeUnit.ALL,
+        warmup_runs: int = 20,
+        benchmark_runs: int = 100,
         seed: int = 42,
         ci_mode: bool = False,
     ):
@@ -342,9 +374,9 @@ class CoreMLBenchmarkRunner:
         configure_determinism(seed, ci_mode)
 
         self.model_path = Path(model_path)
-        self.compute_unit = compute_unit
         self.warmup_runs = warmup_runs
         self.benchmark_runs = benchmark_runs
+        self.compute_unit = compute_unit
 
         self.model = ct.models.MLModel(
             str(self.model_path),
@@ -355,6 +387,52 @@ class CoreMLBenchmarkRunner:
         self.inputs = {
             i.name: tuple(i.type.multiArrayType.shape)
             for i in spec.description.input
+        }
+        # Store full input spec with dtype for accuracy checker
+        self._input_spec = self._build_input_spec(spec)
+
+    # CoreML protobuf dataType → numpy dtype
+    _COREML_DTYPE_MAP = {
+        65552: np.float32,   # FLOAT32
+        65553: np.float16,   # FLOAT16
+        131104: np.int32,    # INT32
+        131072: np.int32,    # INT32 (alternate)
+        65536: np.float64,   # DOUBLE
+    }
+
+    def _build_input_spec(self, spec) -> list:
+        from ..core.accuracy.inputs import InputSpec
+        result = []
+        for inp in spec.description.input:
+            ma = inp.type.multiArrayType
+            shape = tuple(int(d) for d in ma.shape)
+            # Strip leading batch dim of 1 — generate_batch prepends its own
+            if len(shape) > 1 and shape[0] == 1:
+                shape = shape[1:]
+            dtype = self._COREML_DTYPE_MAP.get(ma.dataType, np.float32)
+            result.append(InputSpec(name=inp.name, shape=shape, dtype=dtype))
+        return result
+
+    def get_input_spec(self) -> list:
+        """Return input specs for accuracy checker."""
+        return self._input_spec
+
+    def predict(self, inputs: dict) -> dict:
+        """
+        Run single inference and return output tensors as numpy arrays.
+        Used by accuracy checker — separate from benchmarking loop.
+        Re-adds batch dim if the model spec requires rank 4 but input is rank 3.
+        """
+        batched = {}
+        for name, arr in inputs.items():
+            expected_rank = len(self.inputs.get(name, arr.shape)) + 1  # +1 for batch
+            if arr.ndim < expected_rank:
+                arr = arr[np.newaxis, ...]
+            batched[name] = arr
+        raw = self.model.predict(batched)
+        return {
+            k: np.array(v, dtype=np.float32) if not isinstance(v, np.ndarray) else v
+            for k, v in raw.items()
         }
 
     def _generate_inputs(self) -> Dict[str, np.ndarray]:
@@ -445,3 +523,167 @@ class CoreMLBenchmarkRunner:
     def export_json(self, result: BenchmarkResult, output_path: Path):
         with open(output_path, "w") as f:
             json.dump(asdict(result), f, indent=2)
+
+
+# ==============================
+# TFLite Benchmark Runner
+# ==============================
+
+class TFLiteBenchmarkRunner(BenchmarkRunner):
+    """
+    Minimal TFLite benchmark runner.
+
+    Uses tflite_runtime if available, falls back to
+    tensorflow.lite.Interpreter for dev environments.
+    """
+
+    def __init__(
+        self,
+        model_path: Path,
+        warmup_runs: int = 20,
+        benchmark_runs: int = 100,
+    ):
+        super().__init__(model_path, warmup_runs, benchmark_runs)
+        self._interpreter = None
+
+    def _get_interpreter(self):
+        if self._interpreter is not None:
+            return self._interpreter
+
+        try:
+            import tflite_runtime.interpreter as tflite
+            self._interpreter = tflite.Interpreter(model_path=str(self.model_path))
+        except ImportError:
+            try:
+                import tensorflow as tf
+                self._interpreter = tf.lite.Interpreter(model_path=str(self.model_path))
+            except ImportError:
+                raise RuntimeError(
+                    "TFLite runtime not found. Install tflite-runtime or tensorflow."
+                )
+
+        self._interpreter.allocate_tensors()
+        return self._interpreter
+
+    def _generate_inputs(self, interpreter) -> list:
+        input_details = interpreter.get_input_details()
+        inputs = []
+        for detail in input_details:
+            shape = detail["shape"]
+            dtype = detail["dtype"]
+            data = np.ones(shape, dtype=dtype)
+            inputs.append((detail["index"], data))
+        return inputs
+
+    def get_input_spec(self) -> list:
+        """Return input specs for accuracy checker."""
+        from ..core.accuracy.inputs import InputSpec
+        interpreter = self._get_interpreter()
+        result = []
+        for detail in interpreter.get_input_details():
+            shape = tuple(int(d) for d in detail["shape"])
+            # TFLite gives us numpy dtype directly
+            dtype = np.dtype(detail["dtype"])
+            # Strip batch dim if shape starts with 1 and has >1 dims
+            input_shape = shape[1:] if len(shape) > 1 and shape[0] == 1 else shape
+            result.append(InputSpec(
+                name=detail["name"],
+                shape=input_shape,
+                dtype=dtype,
+            ))
+        return result
+
+    def predict(self, inputs: dict) -> dict:
+        """
+        Run single inference and return output tensors as numpy arrays.
+        Used by accuracy checker — separate from benchmarking loop.
+        """
+        interpreter = self._get_interpreter()
+        for detail in interpreter.get_input_details():
+            name = detail["name"]
+            if name in inputs:
+                data = inputs[name]
+            else:
+                # fallback: match by index order
+                data = list(inputs.values())[detail["index"]]
+            # Add batch dim if needed
+            if data.ndim == len(detail["shape"]) - 1:
+                data = data[np.newaxis, ...]
+            interpreter.set_tensor(detail["index"], data.astype(detail["dtype"]))
+
+        interpreter.invoke()
+
+        outputs = {}
+        for detail in interpreter.get_output_details():
+            outputs[detail["name"]] = interpreter.get_tensor(detail["index"]).copy()
+        return outputs
+
+    def run(self, build_id: str, return_raw: bool = False) -> BenchmarkResult:
+        import time as _time
+
+        interpreter = self._get_interpreter()
+        inputs = self._generate_inputs(interpreter)
+
+        def _invoke():
+            for idx, data in inputs:
+                interpreter.set_tensor(idx, data)
+            interpreter.invoke()
+
+        # Warmup
+        for _ in range(self.warmup_runs):
+            try:
+                _invoke()
+            except Exception:
+                pass
+
+        latencies = []
+        failures = 0
+
+        for _ in range(self.benchmark_runs):
+            t0 = _time.perf_counter()
+            try:
+                _invoke()
+            except Exception:
+                failures += 1
+                continue
+            latencies.append((_time.perf_counter() - t0) * 1000)
+
+        latencies = np.array(latencies)
+        latencies = mad_based_filter(latencies)
+
+        p50 = float(np.percentile(latencies, 50))
+        p95 = float(np.percentile(latencies, 95))
+        p99 = float(np.percentile(latencies, 99))
+
+        result = BenchmarkResult(
+            build_id=build_id,
+            chip="cpu",
+            compute_unit="CPU_ONLY",
+            num_runs=len(latencies),
+            failures=failures,
+            latency_p50=p50,
+            latency_p95=p95,
+            latency_p99=p99,
+            latency_mean=float(np.mean(latencies)),
+            latency_std=float(np.std(latencies)),
+            p50_ci_low=p50,
+            p50_ci_high=p50,
+            autocorr_lag1=autocorrelation_lag1(latencies),
+            memory_peak_mb=0.0,
+            thermal_drift_ratio=1.0,
+            hardware={},
+        )
+
+        if return_raw:
+            return result, latencies
+        return result
+
+
+# ==============================
+# Runner Registry
+# ==============================
+
+BENCHMARK_RUNNERS: dict[str, type[BenchmarkRunner]] = {
+    "coreml": CoreMLBenchmarkRunner,
+    "tflite": TFLiteBenchmarkRunner,
+}

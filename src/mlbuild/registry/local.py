@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Local SQLite registry for MLBuild.
 
@@ -11,20 +13,23 @@ Invariants:
 - Tags are Docker-style aliases (1 tag -> 1 build).
 """
 
-from __future__ import annotations
 
 import json
 import logging
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Any
+from typing import TYPE_CHECKING, List, Optional, Any
 from datetime import datetime, timezone
 from decimal import Decimal
 from contextlib import contextmanager
 
 from .schema import SCHEMA_SQL
+
 from ..core.types import Build, Benchmark
 from ..core.errors import InternalError
+
+if TYPE_CHECKING:
+    from ..core.accuracy.config import AccuracyResult
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +89,9 @@ class LocalRegistry:
 
     def init_schema(self) -> None:
         """Initialize database schema. Called only by 'mlbuild init'."""
-        from .schema import SCHEMA_VERSION, MIGRATION_V4_TO_V5
+        from .schema import SCHEMA_VERSION, SCHEMA_SQL, get_migration
 
         with self._connect() as conn:
-            # Check if schema_version table exists
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             )
@@ -100,35 +104,25 @@ class LocalRegistry:
                 if row:
                     db_version = row[0]
 
-                    # ── v4 → v5 migration ──────────────────────────────
-                    if db_version == 4:
-                        logger.info("Migrating schema v4 → v5 (adding imported column)...")
-                        col_exists = conn.execute(
-                            "SELECT COUNT(*) FROM pragma_table_info('builds') "
-                            "WHERE name = 'imported'"
-                        ).fetchone()[0]
+                    if db_version > SCHEMA_VERSION:
+                        raise InternalError(
+                            f"Database schema v{db_version} is newer than MLBuild "
+                            f"v{SCHEMA_VERSION}. Upgrade MLBuild."
+                        )
 
-                        if not col_exists:
-                            conn.executescript(MIGRATION_V4_TO_V5)
-                        else:
-                            conn.execute(
-                                "UPDATE schema_version SET version = 5, "
-                                "applied_at = datetime('now') WHERE id = 1"
+                    # Run all pending migrations in order
+                    while db_version < SCHEMA_VERSION:
+                        sql = get_migration(db_version, db_version + 1)
+                        if not sql:
+                            raise InternalError(
+                                f"No migration path from v{db_version} to "
+                                f"v{db_version + 1}. Cannot upgrade automatically."
                             )
-                        logger.info("Migration v4 → v5 complete.")
-                        return
-
-                    elif db_version < SCHEMA_VERSION:
-                        raise InternalError(
-                            f"Database schema v{db_version} is outdated. "
-                            f"Expected v{SCHEMA_VERSION}. "
-                            f"Migration required but not yet implemented."
-                        )
-                    elif db_version > SCHEMA_VERSION:
-                        raise InternalError(
-                            f"Database schema v{db_version} is newer than MLBuild v{SCHEMA_VERSION}. "
-                            f"Upgrade MLBuild."
-                        )
+                        logger.info(f"Migrating schema v{db_version} → v{db_version + 1}...")
+                        conn.executescript(sql)
+                        db_version += 1
+                        logger.info(f"Migration to v{db_version} complete.")
+                    return
 
             # Fresh install — create full schema
             try:
@@ -136,13 +130,12 @@ class LocalRegistry:
             except sqlite3.OperationalError as e:
                 raise InternalError(f"Schema initialization failed: {e}")
 
-            # Verify version after init
             cursor = conn.execute("SELECT version FROM schema_version WHERE id = 1")
             row = cursor.fetchone()
-
             if row and row[0] != SCHEMA_VERSION:
                 raise InternalError(
-                    f"Schema version mismatch after init: got {row[0]}, expected {SCHEMA_VERSION}"
+                    f"Schema version mismatch after init: got {row[0]}, "
+                    f"expected {SCHEMA_VERSION}"
                 )
 
     def verify_schema(self) -> tuple[bool, str]:
@@ -242,7 +235,21 @@ class LocalRegistry:
                     build.os_version,
                     build.artifact_path,
                     int(build.size_mb * 1024 * 1024),
-                    _is_imported(build),  # v5: explicit imported flag
+                    _is_imported(build),
+                    getattr(build, "task_type", None),
+                    getattr(build, "variant_id", None),
+                    getattr(build, "root_build_id", None),
+                    getattr(build, "parent_build_id", None),
+                    getattr(build, "optimization_pass", None),
+                    getattr(build, "optimization_method", None),
+                    getattr(build, "weight_precision", None),
+                    getattr(build, "activation_precision", None),
+                    1 if getattr(build, "has_graph", False) else 0,
+                    getattr(build, "graph_format", None),
+                    getattr(build, "graph_path", None),
+                    getattr(build, "cached_latency_p50_ms", None),
+                    getattr(build, "cached_latency_p95_ms", None),
+                    getattr(build, "cached_memory_peak_mb", None),
                 )
                 
                 logger.info(f"Inserting {len(values)} values into builds table")
@@ -250,29 +257,25 @@ class LocalRegistry:
                 conn.execute(
                     """
                     INSERT INTO builds (
-                        build_id,
-                        artifact_hash,
-                        source_hash,
-                        config_hash,
-                        env_fingerprint,
-                        name,
-                        notes,
-                        created_at,
-                        source_path,
-                        target_device,
-                        format,
-                        quantization,
-                        optimizer_config,
-                        backend_versions,
-                        environment_data,
-                        mlbuild_version,
-                        python_version,
-                        platform,
-                        os_version,
-                        artifact_path,
-                        size_bytes,
-                        imported
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        build_id, artifact_hash, source_hash, config_hash,
+                        env_fingerprint, name, notes, created_at, source_path,
+                        target_device, format, quantization, optimizer_config,
+                        backend_versions, environment_data, mlbuild_version,
+                        python_version, platform, os_version, artifact_path,
+                        size_bytes, imported,
+                        task_type,
+                        variant_id, root_build_id, parent_build_id,
+                        optimization_pass, optimization_method,
+                        weight_precision, activation_precision,
+                        has_graph, graph_format, graph_path,
+                        cached_latency_p50_ms, cached_latency_p95_ms,
+                        cached_memory_peak_mb
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?
+                    )
                     """,
                     values,
                 )
@@ -311,7 +314,7 @@ class LocalRegistry:
 
             return self._row_to_build(row) if row else None
 
-    def resolve_build(self, identifier: str) -> Optional[Build]:
+    def resolve_build(self, identifier: str, roots_only: bool = False) -> Optional[Build]:
             """
             Resolve by:
             1. Tag (exact match)
@@ -342,27 +345,31 @@ class LocalRegistry:
                 return build
 
             with self._connect() as conn:
+
                 # 3. Prefix match
+                prefix_where = "build_id LIKE ? || '%' AND deleted_at IS NULL"
+                if roots_only:
+                    prefix_where += " AND parent_build_id IS NULL"
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM builds
-                    WHERE build_id LIKE ? || '%'
-                    AND deleted_at IS NULL
+                    WHERE {prefix_where}
                     """,
                     (identifier,),
                 ).fetchall()
-
                 if len(rows) == 1:
                     return self._row_to_build(rows[0])
                 elif len(rows) > 1:
                     raise InternalError("Ambiguous build prefix")
 
                 # 4. Exact name
+                where = "name = ? AND deleted_at IS NULL"
+                if roots_only:
+                    where += " AND parent_build_id IS NULL"
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT * FROM builds
-                    WHERE name = ?
-                    AND deleted_at IS NULL
+                    WHERE {where}
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
@@ -401,6 +408,9 @@ class LocalRegistry:
             List of matching Build objects
         """
         builds = self.list_builds(limit=1000) 
+
+
+        
         return [b for b in builds if b.build_id.startswith(prefix)]
 
     def list_builds(
@@ -477,6 +487,146 @@ class LocalRegistry:
             except Exception:
                 conn.rollback()
                 raise
+
+    @property
+    def artifacts_root(self) -> Path:
+        return self.db_path.parent / "artifacts"
+    
+
+    def update_cached_benchmark(
+        self,
+        build_id: str,
+        latency_p50_ms: float,
+        latency_p95_ms: float,
+        memory_peak_mb: float,
+    ) -> None:
+        """Cache benchmark results on the build row for quick access."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE builds
+                SET cached_latency_p50_ms = ?,
+                    cached_latency_p95_ms = ?,
+                    cached_memory_peak_mb = ?
+                WHERE build_id = ?
+                """,
+                (latency_p50_ms, latency_p95_ms, memory_peak_mb, build_id),
+            )
+
+    def find_baseline(
+        self,
+        source_hash: str,
+        format: str,
+        target_device: str,
+    ) -> Optional[Build]:
+        """
+        Find existing root build by content identity.
+        Never matches variants (parent_build_id IS NULL enforced).
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM builds
+                WHERE source_hash = ?
+                AND format = ?
+                AND target_device = ?
+                AND parent_build_id IS NULL
+                AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (source_hash, format, target_device),
+            ).fetchone()
+        return self._row_to_build(row) if row else None
+    
+    # ------------------------------------------------------------
+    # Accuracy Checks
+    # ------------------------------------------------------------
+
+    def save_accuracy_check(self, result: AccuracyResult) -> int:
+        """
+        Persist an accuracy check result to the registry.
+        Returns the row id.
+        """
+        row = result.as_db_row()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO accuracy_checks (
+                    baseline_build_id,
+                    candidate_build_id,
+                    cosine_similarity,
+                    mean_abs_error,
+                    max_abs_error,
+                    top1_agreement,
+                    num_samples,
+                    seed,
+                    passed,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["baseline_build_id"],
+                    row["candidate_build_id"],
+                    row["cosine_similarity"],
+                    row["mean_abs_error"],
+                    row["max_abs_error"],
+                    row["top1_agreement"],
+                    row["num_samples"],
+                    row["seed"],
+                    row["passed"],
+                    row["created_at"],
+                ),
+            )
+            return cursor.lastrowid
+
+    def get_accuracy_checks(
+        self,
+        baseline_build_id: str,
+        candidate_build_id: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Retrieve accuracy check history for a baseline build.
+
+        Parameters
+        ----------
+        baseline_build_id
+            The reference build to look up checks for.
+        candidate_build_id
+            If provided, filter to checks against this specific candidate.
+        limit
+            Max rows to return, newest first.
+
+        Returns
+        -------
+        list[dict]
+            Raw dicts with all accuracy_checks columns.
+        """
+        with self._connect() as conn:
+            if candidate_build_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM accuracy_checks
+                    WHERE baseline_build_id = ?
+                    AND   candidate_build_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (baseline_build_id, candidate_build_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM accuracy_checks
+                    WHERE baseline_build_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (baseline_build_id, limit),
+                ).fetchall()
+
+            return [dict(r) for r in rows]
 
     # ------------------------------------------------------------
     # Benchmarks
@@ -587,4 +737,18 @@ class LocalRegistry:
             os_version=row["os_version"],
             artifact_path=row["artifact_path"],
             size_mb=Decimal(row["size_bytes"]) / Decimal(1024 * 1024),
+            task_type=safe_get(row, "task_type"),
+            variant_id=safe_get(row, "variant_id"),
+            root_build_id=safe_get(row, "root_build_id"),
+            parent_build_id=safe_get(row, "parent_build_id"),
+            optimization_pass=safe_get(row, "optimization_pass"),
+            optimization_method=safe_get(row, "optimization_method"),
+            weight_precision=safe_get(row, "weight_precision"),
+            activation_precision=safe_get(row, "activation_precision"),
+            has_graph=bool(safe_get(row, "has_graph", 0)),
+            graph_format=safe_get(row, "graph_format"),
+            graph_path=safe_get(row, "graph_path"),
+            cached_latency_p50_ms=safe_get(row, "cached_latency_p50_ms"),
+            cached_latency_p95_ms=safe_get(row, "cached_latency_p95_ms"),
+            cached_memory_peak_mb=safe_get(row, "cached_memory_peak_mb"),
         )

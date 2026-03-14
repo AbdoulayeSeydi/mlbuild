@@ -254,6 +254,13 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
 
             if not final_path.exists():
                 shutil.copy2(str(tflite_path), str(final_path))
+                # Store ONNX graph once for optimize command
+                graphs_root = Path(".mlbuild/graphs").resolve()
+                graphs_root.mkdir(parents=True, exist_ok=True)
+                graph_dest = graphs_root / f"{build_id}.onnx"
+                if not graph_dest.exists():
+                    shutil.copy2(str(model), str(graph_dest))
+                graph_path = f"graphs/{build_id}.onnx"
 
             size_mb = Decimal(str(round(final_path.stat().st_size / (1024 * 1024), 6)))
 
@@ -292,6 +299,9 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 os_version=env_data["hardware"]["cpu"]["release"],
                 artifact_path=str(final_path),
                 size_mb=size_mb,
+                has_graph=True,
+                graph_format="onnx",
+                graph_path=graph_path,
                 task_type=task_info.primary.value,  # --- PATCH ---
             )
 
@@ -518,15 +528,25 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 if verified_hash != artifact_hash:
                     shutil.rmtree(final_dir, ignore_errors=True)
                     raise RuntimeError("Artifact integrity verification failed")
+                
+            # ---------------------------------------------------------
+            # Step 11: Store ONNX graph once for optimize command
+            # ---------------------------------------------------------
+            graphs_root = Path(".mlbuild/graphs").resolve()
+            graphs_root.mkdir(parents=True, exist_ok=True)
+            graph_dest = graphs_root / f"{build_id}.onnx"
+            if not graph_dest.exists():
+                shutil.copy2(str(model), str(graph_dest))
+            graph_path = f"graphs/{build_id}.onnx"
 
             # ---------------------------------------------------------
-            # Step 11: Compute exact byte size
+            # Step 12: Compute exact byte size
             # ---------------------------------------------------------
             size_bytes = _directory_size_bytes(final_dir)
             size_mb = Decimal(size_bytes) / Decimal(1024 * 1024)
 
             # ---------------------------------------------------------
-            # Step 12: Create Build object with environment data
+            # Step 13: Create Build object with environment data
             # ---------------------------------------------------------
             # Extract framework versions from env_data structure
             backend_versions = {}
@@ -571,11 +591,14 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 os_version=env_data["hardware"]["cpu"]["release"],
                 artifact_path=str(final_dir),
                 size_mb=size_mb,
+                has_graph=True,
+                graph_format="onnx",
+                graph_path=graph_path,
                 task_type=task_result.primary.value,  # --- PATCH ---
             )
 
             # ---------------------------------------------------------
-            # Step 13: Registry transaction
+            # Step 14: Registry transaction
             # ---------------------------------------------------------
             registry = LocalRegistry()
             try:
@@ -613,6 +636,283 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         traceback.print_exc()
         sys.exit(1)
 
+# ============================================================
+# Programmatic build API (used by explore and other commands)
+# ============================================================
+
+def run_build(
+    model_path: Path,
+    target: str,
+    name: str,
+    quantization: str = "fp32",
+    format: str = "coreml",
+    registry: Optional["LocalRegistry"] = None,
+    notes: Optional[str] = None,
+    task: Optional[str] = None,
+) -> "Build":
+    """
+    Programmatic build API — no console output, no sys.exit.
+
+    Returns the registered Build object.
+    Used by: mlbuild explore, mlbuild optimize (future).
+    The Click `build` command remains independent with its own output.
+    """
+    from ...registry.local import LocalRegistry as _LocalRegistry
+    from decimal import Decimal
+    from datetime import datetime, timezone
+
+    model_path = Path(model_path)
+    _registry = registry or _LocalRegistry()
+
+    if format == "coreml":
+        return _run_coreml_build(
+            model_path=model_path,
+            target=target,
+            name=name,
+            quantize=quantization,
+            notes=notes,
+            task=task,
+            registry=_registry,
+        )
+    elif format == "tflite":
+        return _run_tflite_build(
+            model_path=model_path,
+            target=target,
+            name=name,
+            quantize=quantization,
+            notes=notes,
+            task=task,
+            registry=_registry,
+        )
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+
+
+def _run_coreml_build(
+    model_path: Path,
+    target: str,
+    name: str,
+    quantize: str,
+    notes: Optional[str],
+    task: Optional[str],
+    registry: "LocalRegistry",
+) -> "Build":
+    import shutil
+    import tempfile
+    from decimal import Decimal
+    from datetime import datetime, timezone
+
+    # Step 1: Environment
+    env_data = collect_environment()
+    env_fingerprint = hash_environment(env_data)
+
+    # Step 2: Load model
+    ir = load_model(str(model_path))
+
+    # Step 3: Hash source
+    source_hash = compute_source_hash(model_path)
+
+    # Step 4: Config
+    try:
+        import coremltools as ct
+        coremltools_version = ct.__version__
+    except ImportError:
+        coremltools_version = "unknown"
+
+    config = {
+        "target": target,
+        "quantization": {"type": quantize},
+        "optimizer": {"compute_units": "ALL"},
+    }
+    config_hash = compute_config_hash(config, coremltools_version=coremltools_version)
+
+    # Step 5: Task detection
+    import onnx as _onnx
+    _onnx_model = _onnx.load(str(model_path))
+    task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
+
+    # Step 6: Convert
+    with tempfile.TemporaryDirectory() as tmp_root:
+        tmp_root = Path(tmp_root)
+        import io, contextlib
+        exporter = CoreMLExporter(target=target)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            mlpackage_path, _ = exporter.export(
+                ir,
+                output_dir=tmp_root,
+                quantization=quantize,
+                calibration_data=None,
+            )
+
+        # Step 7: Artifact hash + build ID
+        artifact_hash = compute_artifact_hash(mlpackage_path)
+        build_id = _structured_build_id(
+            source_hash, config_hash, artifact_hash,
+            env_fingerprint, MLBUILD_VERSION,
+        )
+
+        # Step 8: Promote artifact
+        artifacts_root = Path(".mlbuild/artifacts").resolve()
+        final_dir = artifacts_root / artifact_hash
+        artifacts_root.mkdir(parents=True, exist_ok=True)
+
+        if not final_dir.exists():
+            shutil.move(str(mlpackage_path), str(final_dir))
+
+        # Step 9: Store graph
+        graphs_root = Path(".mlbuild/graphs").resolve()
+        graphs_root.mkdir(parents=True, exist_ok=True)
+        graph_dest = graphs_root / f"{build_id}.onnx"
+        if not graph_dest.exists():
+            shutil.copy2(str(model_path), str(graph_dest))
+        graph_path = f"graphs/{build_id}.onnx"
+
+        # Step 10: Size
+        size_bytes = _directory_size_bytes(final_dir)
+        size_mb = Decimal(size_bytes) / Decimal(1024 * 1024)
+
+        # Step 11: Backend versions
+        backend_versions = {}
+        try:
+            import coremltools as ct
+            backend_versions["coremltools"] = ct.__version__
+        except ImportError:
+            backend_versions["coremltools"] = "unknown"
+        backend_versions["onnx"] = ir.metadata.get("framework_version", "unknown")
+
+        # Step 12: Build object
+        build_obj = Build(
+            build_id=build_id,
+            artifact_hash=artifact_hash,
+            source_hash=source_hash,
+            config_hash=config_hash,
+            env_fingerprint=env_fingerprint,
+            name=name,
+            notes=notes,
+            created_at=datetime.now(timezone.utc),
+            source_path=str(model_path.resolve()),
+            target_device=target,
+            format="coreml",
+            quantization=config["quantization"],
+            optimizer_config=config["optimizer"],
+            backend_versions=backend_versions,
+            environment_data=env_data,
+            mlbuild_version=MLBUILD_VERSION,
+            python_version=env_data["python"]["version"],
+            platform=env_data["hardware"]["cpu"]["system"],
+            os_version=env_data["hardware"]["cpu"]["release"],
+            artifact_path=str(final_dir),
+            size_mb=size_mb,
+            has_graph=True,
+            graph_format="onnx",
+            graph_path=graph_path,
+            task_type=task_result.primary.value,
+        )
+
+        # Step 13: Save
+        try:
+            registry.save_build(build_obj)
+        except Exception:
+            pass  # Duplicate — artifact still valid
+
+    return build_obj
+
+
+def _run_tflite_build(
+    model_path: Path,
+    target: str,
+    name: str,
+    quantize: str,
+    notes: Optional[str],
+    task: Optional[str],
+    registry: "LocalRegistry",
+) -> "Build":
+    import shutil
+    from decimal import Decimal
+    from datetime import datetime, timezone
+    from ...backends.registry import BackendRegistry
+
+    env_data = collect_environment()
+    env_fingerprint = hash_environment(env_data)
+    source_hash = compute_source_hash(model_path)
+
+    config = {
+        "target": target,
+        "quantization": {"type": quantize},
+        "optimizer": {},
+    }
+    config_hash = compute_config_hash(config)
+
+    backend_inst = BackendRegistry.get_backend("tflite")
+    tflite_path = backend_inst._export(
+        model_path=model_path,
+        quantize=quantize,
+        name=name,
+        representative_dataset=None,
+    )
+
+    artifact_hash = compute_source_hash(tflite_path)
+    build_id = _structured_build_id(
+        source_hash, config_hash, artifact_hash,
+        env_fingerprint, MLBUILD_VERSION,
+    )
+
+    artifacts_root = Path(".mlbuild/artifacts").resolve()
+    final_path = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+
+    if not final_path.exists():
+        shutil.copy2(str(tflite_path), str(final_path))
+
+    graphs_root = Path(".mlbuild/graphs").resolve()
+    graphs_root.mkdir(parents=True, exist_ok=True)
+    graph_dest = graphs_root / f"{build_id}.onnx"
+    if not graph_dest.exists():
+        shutil.copy2(str(model_path), str(graph_dest))
+
+    graph_path = f"graphs/{build_id}.onnx"
+    size_mb = Decimal(str(round(final_path.stat().st_size / (1024 * 1024), 6)))
+
+    backend_versions = {"tflite": backend_inst._tf_version()}
+
+    import onnx as _onnx
+    _onnx_model = _onnx.load(str(model_path))
+    task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
+
+    build_obj = Build(
+        build_id=build_id,
+        artifact_hash=artifact_hash,
+        source_hash=source_hash,
+        config_hash=config_hash,
+        env_fingerprint=env_fingerprint,
+        name=name,
+        notes=notes,
+        created_at=datetime.now(timezone.utc),
+        source_path=str(model_path.resolve()),
+        target_device=target,
+        format="tflite",
+        quantization=config["quantization"],
+        optimizer_config=config["optimizer"],
+        backend_versions=backend_versions,
+        environment_data=env_data,
+        mlbuild_version=MLBUILD_VERSION,
+        python_version=env_data["python"]["version"],
+        platform=env_data["hardware"]["cpu"]["system"],
+        os_version=env_data["hardware"]["cpu"]["release"],
+        artifact_path=str(final_path),
+        size_mb=size_mb,
+        has_graph=True,
+        graph_format="onnx",
+        graph_path=graph_path,
+        task_type=task_result.primary.value,
+    )
+
+    try:
+        registry.save_build(build_obj)
+    except Exception:
+        pass
+
+    return build_obj
 
 # ---------------------------------------------------------------------
 # Shared helper: build ModelInfo + call detect_task
@@ -621,35 +921,52 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
 def _detect_task_from_onnx(onnx_model, forced_task: str | None):
     """
     Build a ModelInfo from a loaded ONNX model and run task detection.
-
-    forced_task : value of --task flag (str) or None for auto-detect.
-    Returns a TaskDetection (arbitration result) from detect_task().
     """
-    import onnx
+    from ...core.task_detection import TensorInfo
+    import numpy as np
 
     graph = onnx_model.graph
 
-    op_types = list({node.op_type for node in graph.node})
-
-    input_shapes: dict[str, tuple] = {}
+    # Build TensorInfo list from ONNX graph inputs
+    inputs = []
     for inp in graph.input:
         shape = []
         for dim in inp.type.tensor_type.shape.dim:
             shape.append(dim.dim_value if dim.dim_value > 0 else -1)
-        input_shapes[inp.name] = tuple(shape)
+        
+        # Map ONNX elem_type to numpy dtype
+        elem_type = inp.type.tensor_type.elem_type
+        _ONNX_TO_NP = {
+            1: np.float32, 2: np.uint8, 3: np.int8,
+            5: np.int32,   6: np.int32, 7: np.int64,
+            10: np.float16, 11: np.float64,
+        }
+        dtype = _ONNX_TO_NP.get(elem_type)
 
-    input_names = [inp.name for inp in graph.input]
+        inputs.append(TensorInfo(
+            name=inp.name,
+            shape=tuple(shape) if shape else None,
+            dtype=dtype,
+        ))
 
-    metadata: dict[str, str] = {}
+    # Build TensorInfo list from ONNX graph outputs
+    outputs = []
+    for out in graph.output:
+        outputs.append(TensorInfo(name=out.name))
+
+    op_types = {node.op_type for node in graph.node}
+
+    metadata = {}
     for prop in onnx_model.metadata_props:
         metadata[prop.key] = prop.value
 
     info = ModelInfo(
+        format="onnx",
+        inputs=inputs,
+        outputs=outputs,
         op_types=op_types,
-        input_shapes=input_shapes,
-        input_names=input_names,
+        node_count=len(graph.node),
         metadata=metadata,
-        num_nodes=len(graph.node),
     )
 
     forced = TaskType(forced_task) if forced_task else None
