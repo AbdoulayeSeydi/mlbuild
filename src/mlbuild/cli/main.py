@@ -23,6 +23,19 @@ finally:
     _devnull.close()
 
 from rich.console import Console
+import platform as _platform
+
+def _is_macos() -> bool:
+    return _platform.system() == "Darwin"
+
+def _require_macos(command_name: str) -> None:
+    """Print clear error if CoreML command runs on non-macOS."""
+    if not _is_macos():
+        Console().print(
+            f"\n[red]{command_name} requires macOS (CoreML is Apple-only).[/red]\n"
+            f"[dim]TFLite commands work on all platforms.[/dim]\n"
+        )
+        import sys; sys.exit(1)
 from .commands.remote import remote
 from .commands.push import push
 from .commands.pull import pull

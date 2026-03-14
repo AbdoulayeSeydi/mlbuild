@@ -16,8 +16,13 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
-import coremltools as ct
-from google.protobuf.message import Message
+try:
+    import coremltools as ct
+    from google.protobuf.message import Message
+    _COREML_AVAILABLE = True
+except ImportError:
+    _COREML_AVAILABLE = False
+    ct = None
 
 from ..core.errors import InternalError
 

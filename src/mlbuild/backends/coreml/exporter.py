@@ -14,8 +14,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import coremltools as ct
-import torch
+try:
+    import coremltools as ct
+    import torch
+    _COREML_AVAILABLE = True
+except ImportError:
+    _COREML_AVAILABLE = False
+    ct = None
+    torch = None
 
 from ...core.ir import ModelIR
 from ...core.errors import ConversionError, PlatformError
