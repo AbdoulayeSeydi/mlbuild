@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI version](https://img.shields.io/pypi/v/mlbuild.svg)](https://pypi.org/project/MLBuild/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://github.com/AbdoulayeSeydi/mlbuild)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/AbdoulayeSeydi/mlbuild)
 
 MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&B track training experiments, MLBuild enforces production SLAs — automatically benchmarking inference performance, validating against thresholds, blocking regressions in CI, and generating deployment-ready reports.
 
@@ -27,7 +27,7 @@ MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&
 | Backends | CoreML, TFLite, ONNX Runtime |
 | Storage | Local + S3-compatible (AWS S3, R2, B2) |
 | Targets | Apple Silicon, A-series, Android (arm64) |
-| Platform | macOS |
+| Platform | macOS, Linux (TFLite) |
 
 ---
 
@@ -157,6 +157,16 @@ pip install "mlbuild[tflite]"
 For S3 remote storage:
 ```bash
 pip install "mlbuild[s3]"
+```
+
+For macOS (CoreML + TFLite full stack):
+```bash
+pip install "mlbuild[macos]"
+```
+
+For Linux / CI (TFLite only, no CoreML):
+```bash
+pip install "mlbuild[linux]"
 ```
 
 ---
@@ -1182,6 +1192,12 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 ## Roadmap
+
+### ✅ Cross-Platform Support *(shipped in v0.3.0)*
+- `coremltools` and `torch` are now optional — `pip install mlbuild` works on Linux without crashing
+- `mlbuild[linux]` installs the TFLite-only stack for CI environments
+- `mlbuild doctor` shows CoreML/torch as `— (macOS only)` on Linux instead of failures
+- Platform guards in CLI surface clear error messages for CoreML commands on non-macOS
 
 ### Phase 1 — Device-Connected Benchmarking *(next)*
 - Android ADB bridge — benchmark on connected Android devices without Android Studio
