@@ -22,7 +22,7 @@ from typing import Callable, Dict, FrozenSet, Literal, Optional, Set
 # Types
 # ================================================================
 
-Format = Literal["tflite", "coreml"]
+Format = Literal["tflite", "coreml", "onnx"]
 
 TargetFamily = Literal[
     "apple_silicon",
@@ -30,6 +30,7 @@ TargetFamily = Literal[
     "android",
     "linux_arm",
     "linux_x86",
+    "onnxruntime",
 ]
 
 Capability = Literal[
@@ -116,6 +117,10 @@ _TARGET_TO_FAMILY: Dict[str, TargetFamily] = {
     "raspberry_pi":   "linux_arm",
     "coral_tpu":      "linux_arm",
     "generic_linux":  "linux_x86",
+    # ONNX Runtime
+    "onnxruntime_cpu": "onnxruntime",
+    "onnxruntime_gpu": "onnxruntime",
+    "onnxruntime_ane": "onnxruntime",
 }
 
 
@@ -235,6 +240,23 @@ def _validate_coreml(path: Path) -> None:
         raise ModelFormatError(
             f"Unsupported CoreML file type: {path.suffix}"
         )
+    
+# ================================================================
+# ONNX Validation
+# ================================================================
+
+def _validate_onnx(path: Path) -> None:
+    """Validate ONNX file via protobuf check."""
+    if not path.is_file():
+        raise ModelFormatError(f"'{path}' is not a valid file.")
+    try:
+        import onnx
+        model = onnx.load(str(path))
+        onnx.checker.check_model(model)
+    except ImportError:
+        raise ModelFormatError("onnx package required for ONNX import: pip install onnx")
+    except Exception as e:
+        raise ModelFormatError(f"Invalid ONNX model '{path.name}': {e}")
 
 
 # ================================================================
@@ -256,6 +278,10 @@ def detect_and_validate_format(path: Path) -> Format:
     if suffix in {".mlmodel", ".mlpackage"}:
         _validate_coreml(path)
         return "coreml"
+
+    if suffix == ".onnx":
+        _validate_onnx(path)
+        return "onnx"
 
     raise ModelFormatError(
         f"Unsupported model file type '{suffix}'. "
@@ -345,5 +371,14 @@ FormatRegistry.register(
             "npu",
             "fp16",
         }),
+    )
+)
+
+FormatRegistry.register(
+    FormatSpec(
+        name="onnx",
+        validator=_validate_onnx,
+        supported_targets=frozenset({"onnxruntime"}),
+        capabilities=frozenset({"cpu", "gpu", "npu", "fp16", "int8"}),
     )
 )

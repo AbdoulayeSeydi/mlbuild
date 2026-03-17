@@ -555,5 +555,8 @@ cli.add_command(accuracy_command)
 from .commands.history import history as history_group
 cli.add_command(history_group)
 
+from .commands.import_cmd import import_cmd
+cli.add_command(import_cmd, name="import")
+
 if __name__ == "__main__":
     cli()

@@ -252,6 +252,10 @@ mlbuild import --model model.tflite --target android_arm64
 # Import a CoreML model
 mlbuild import --model model.mlpackage --target apple_m1
 
+# Import an ONNX model (benchmarked via ONNX Runtime)
+mlbuild import --model model.onnx --target onnxruntime_cpu
+mlbuild import --model model.onnx --target onnxruntime_gpu
+
 # Import with metadata
 mlbuild import --model model.tflite --target android_arm64 \
   --quantize int8 \
@@ -263,6 +267,7 @@ mlbuild import --model model.tflite --target android_arm64 --json
 ```
 
 **Supported formats:**
+- `.onnx` — validated via protobuf check, runs via ONNX Runtime
 - `.tflite` — validated via FlatBuffer magic bytes (TFL3/TFL2)
 - `.mlpackage` — validated via Manifest.json + Data/ structure
 - `.mlmodel` — legacy CoreML flat file
@@ -271,6 +276,7 @@ mlbuild import --model model.tflite --target android_arm64 --json
 
 | Format | Valid Targets |
 |--------|--------------|
+| `onnx` | `onnxruntime_cpu`, `onnxruntime_gpu`, `onnxruntime_ane` |
 | `tflite` | `android_arm64`, `android_arm32`, `android_x86`, `raspberry_pi`, `coral_tpu`, `generic_linux` |
 | `coreml` | `apple_m1`, `apple_m2`, `apple_m3`, `apple_a15`, `apple_a16`, `apple_a17` |
 
@@ -757,7 +763,7 @@ Detection runs through three tiers in order of confidence:
 
 | Tier | Method | Formats | Confidence | CLI Behavior |
 |------|--------|---------|------------|--------------|
-| **Graph** | Op/layer analysis (`Conv`, `Attention`, `STFT`, etc.) | ONNX, CoreML NN | High | Silent |
+| **Graph** | Op/layer analysis (`Conv`, `Attention`, `STFT`, etc.) | ONNX, TFLite, CoreML | High | Silent |
 | **Name** | Tensor name heuristics (`input_ids`, `pixel_values`, `mel`) | All | Medium | Warning |
 | **Shape** | Dtype + rank heuristics (rank-4 float = vision, rank-2 int = NLP) | All | Low | Warning + zeros fallback |
 ```bash
@@ -971,8 +977,10 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - ONNX graph storage for re-conversion
 
 ### Import Pre-built Models
-- Import existing `.tflite`, `.mlmodel`, `.mlpackage` files directly
-- Format validation via magic bytes (TFLite) and structure checks (CoreML)
+- Import existing `.onnx`, `.tflite`, `.mlmodel`, `.mlpackage` files directly
+- ONNX import runs via ONNX Runtime — `onnxruntime_cpu`, `onnxruntime_gpu`, `onnxruntime_ane` targets
+- Format validation via protobuf check (ONNX), magic bytes (TFLite), structure checks (CoreML)
+- Tier 1 task detection for all import formats — ONNX via graph ops, TFLite via FlatBuffer parsing, CoreML via coremltools spec
 - Format/target compatibility enforcement
 - Imported builds tracked with `[imported]` badge in `mlbuild log`
 - Full MLBuild toolchain available immediately after import

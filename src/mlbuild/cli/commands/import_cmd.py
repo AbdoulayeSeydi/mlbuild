@@ -114,32 +114,90 @@ def _read_global_strict() -> bool:
         return False
 
 
-def _detect_task_from_nongraph(model: Path, fmt: str, forced_task: str | None):
+def _detect_task_for_import(model: Path, fmt: str, forced_task: str | None):
+
+    from mlbuild.core.task_detection import (
+    detect_task, ModelInfo, TaskType, TensorInfo,
+    extract_tflite_info, extract_coreml_info,
+)
     """
-    Task detection for TFLite / CoreML formats (Tier 2/3 only — no ONNX graph).
+    Route to best available task detection based on format.
 
-    Builds ModelInfo from file path heuristics (name + extension) and
-    delegates to detect_task(). Tier 1 graph analysis is unavailable
-    for non-ONNX formats — detection relies on name patterns and shapes.
-
-    forced_task : value of --task flag (str) or None for auto-detect.
-    Returns a TaskDetection (arbitration result).
+    ONNX    → Tier 1 via full graph analysis (existing path)
+    TFLite  → Tier 1 via FlatBuffer op extraction (new)
+    CoreML  → Tier 1 via coremltools spec parsing (new)
     """
-    # Derive input name hints from the filename stem
-    stem = model.stem.lower()
-    input_names = [stem]
-
-    # No op graph available — pass empty op_types so Tier 1 is skipped
-    info = ModelInfo(
-        op_types=[],
-        input_shapes={},
-        input_names=input_names,
-        metadata={"model_name": stem, "format": fmt},
-        num_nodes=0,
+    from mlbuild.core.task_detection import (
+        detect_task, ModelInfo, TaskType,
+        extract_tflite_info, extract_coreml_info,
     )
 
     forced = TaskType(forced_task) if forced_task else None
-    return detect_task(info, forced=forced)
+
+    if fmt == "onnx":
+        # Tier 1 — extract op types directly from ONNX protobuf
+        # Avoids full load pipeline, same signal quality
+        try:
+            import onnx
+            model_proto = onnx.load(str(model))
+            op_types = {node.op_type for node in model_proto.graph.node}
+            node_count = len(model_proto.graph.node)
+
+            # Extract input tensor info
+            inputs = []
+            for inp in model_proto.graph.input:
+                shape = None
+                dtype = None
+                try:
+                    tensor_type = inp.type.tensor_type
+                    dtype_int = tensor_type.elem_type
+                    # ONNX dtype map
+                    ONNX_DTYPE_MAP = {
+                        1: "float32", 2: "uint8", 3: "int8",
+                        4: "uint16", 5: "int16", 6: "int32",
+                        7: "int64", 10: "float16", 11: "float64",
+                    }
+                    dtype = ONNX_DTYPE_MAP.get(dtype_int)
+                    if tensor_type.HasField("shape"):
+                        shape = tuple(
+                            d.dim_value if d.dim_value > 0 else -1
+                            for d in tensor_type.shape.dim
+                        )
+                except Exception:
+                    pass
+                inputs.append(TensorInfo(
+                    name=inp.name,
+                    shape=shape,
+                    dtype=dtype,
+                ))
+
+            info = ModelInfo(
+                format="onnx",
+                op_types=op_types,
+                node_count=node_count,
+                inputs=inputs,
+            )
+            return detect_task(info, forced=forced_task)
+
+        except Exception:
+            # Fallback to filename heuristics
+            info = ModelInfo(format="onnx")
+            info.metadata["model_name"] = model.stem.lower()
+            return detect_task(info, forced=forced_task)
+
+    if fmt == "tflite":
+        info = extract_tflite_info(model)
+        return detect_task(info, forced=forced_task)
+
+    if fmt == "coreml":
+        info = extract_coreml_info(model)
+        return detect_task(info, forced=forced_task)
+
+    # Fallback — filename heuristics only
+    stem = model.stem.lower()
+    info = ModelInfo(format="unknown")
+    info.metadata["model_name"] = stem
+    return detect_task(info, forced=forced_task)
 
 
 # ================================================================
@@ -161,6 +219,7 @@ def _detect_task_from_nongraph(model: Path, fmt: str, forced_task: str | None):
         "apple_m3",  "apple_m2",  "apple_m1",
         "android_arm64", "android_arm32", "android_x86",
         "raspberry_pi", "coral_tpu", "generic_linux",
+        "onnxruntime_cpu", "onnxruntime_gpu", "onnxruntime_ane",
     ]),
     help="Target device this model was built for.",
 )
@@ -264,7 +323,7 @@ def _run_import(
 
     # Step 5.5: Task detection (Tier 2/3 only — TFLite/CoreML have no ONNX graph)
     # --- PATCH ---
-    task_result = _detect_task_from_nongraph(model, fmt, forced_task=task)
+    task_result = _detect_task_for_import(model, fmt, forced_task=task)
     warn = detection_warning(task_result)
     if warn:
         console.print(f"\n[yellow]{warn}[/yellow]")

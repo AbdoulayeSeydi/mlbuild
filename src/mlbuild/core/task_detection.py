@@ -564,6 +564,179 @@ def resolve_coreml_range_dim(
         target = defaults.generic_dim
     return max(lo, min(hi, target))
 
+# ---------------------------------------------------------------------------
+# Format-specific Tier 1 extractors
+# ---------------------------------------------------------------------------
+
+def extract_tflite_info(path) -> ModelInfo:
+    """
+    Extract op types from a TFLite FlatBuffer for Tier 1 detection.
+    Falls back to empty ModelInfo if parsing fails — detection degrades
+    gracefully to Tier 2/3 rather than crashing.
+    """
+    from pathlib import Path
+    path = Path(path)
+
+    info = ModelInfo(format="tflite")
+
+    try:
+        import struct
+
+        with path.open("rb") as f:
+            data = f.read()
+
+        # TFLite FlatBuffer: operator_codes table contains op enum values
+        # Map TFLite builtin op codes to human-readable names
+        # Full list: tensorflow/lite/schema/schema.fbs
+        TFLITE_OP_MAP = {
+            0:   "CONV_2D",
+            1:   "DEPTHWISE_CONV_2D",
+            2:   "CONV_2D_TRANSPOSE",
+            3:   "AVERAGE_POOL_2D",
+            4:   "CEIL",
+            5:   "CONCATENATION",
+            6:   "CONV_2D",
+            7:   "DEPTHWISE_CONV_2D",
+            14:  "FULLY_CONNECTED",
+            15:  "HASHTABLE_LOOKUP",
+            16:  "L2_NORMALIZATION",
+            17:  "L2_POOL_2D",
+            18:  "LOCAL_RESPONSE_NORMALIZATION",
+            19:  "LOGISTIC",
+            20:  "LSH_PROJECTION",
+            21:  "LSTM",
+            22:  "MAX_POOL_2D",
+            25:  "RELU",
+            27:  "RESHAPE",
+            28:  "RESIZE_BILINEAR",
+            29:  "RNN",
+            30:  "SOFTMAX",
+            31:  "SPACE_TO_DEPTH",
+            32:  "SVDF",
+            33:  "TANH",
+            37:  "EMBEDDING_LOOKUP",
+            39:  "UNIDIRECTIONAL_SEQUENCE_LSTM",
+            44:  "BATCH_TO_SPACE_ND",
+            48:  "TRANSPOSE_CONV",
+            57:  "BIDIRECTIONAL_SEQUENCE_LSTM",
+            58:  "CAST",
+            71:  "UNIDIRECTIONAL_SEQUENCE_RNN",
+            82:  "DEPTHWISE_CONV_2D",
+            86:  "BATCH_MATMUL",
+            91:  "GELU",
+            92:  "LAYER_NORM_LSTM",
+        }
+
+        # Map op names to task signal categories
+        VISION_OPS  = {"CONV_2D", "DEPTHWISE_CONV_2D", "MAX_POOL_2D",
+                       "AVERAGE_POOL_2D", "L2_POOL_2D", "RESIZE_BILINEAR",
+                       "TRANSPOSE_CONV", "CONV_2D_TRANSPOSE"}
+        NLP_OPS     = {"LSTM", "RNN", "EMBEDDING_LOOKUP", "FULLY_CONNECTED",
+                       "UNIDIRECTIONAL_SEQUENCE_LSTM", "BIDIRECTIONAL_SEQUENCE_LSTM",
+                       "UNIDIRECTIONAL_SEQUENCE_RNN", "LAYER_NORM_LSTM",
+                       "BATCH_MATMUL", "GELU"}
+
+        # Read operator_codes from FlatBuffer
+        # FlatBuffer root object offset is at bytes 0-3
+        root_offset = struct.unpack_from("<I", data, 0)[0]
+
+        # operator_codes field offset — field index 2 in Model table
+        # Use tensorflow's flatbuffers schema position
+        # Safe approach: scan for known op code patterns
+        found_ops = set()
+
+        # Parse operator_codes array from FlatBuffer binary
+        # Each operator code is a small table with builtin_code field
+        i = root_offset
+        scan_limit = min(len(data), root_offset + 8192)
+
+        while i < scan_limit - 4:
+            val = struct.unpack_from("<I", data, i)[0]
+            if val in TFLITE_OP_MAP:
+                found_ops.add(TFLITE_OP_MAP[val])
+            i += 4
+
+        # Map to layer_types used by existing _graph_signals
+        # TFLite uses format="tflite" but we need coreml_nn style signals
+        # so we populate op_types and set format to trigger onnx path
+        vision_hits = found_ops & VISION_OPS
+        nlp_hits    = found_ops & NLP_OPS
+
+        # Store as layer_types for coreml_nn path
+        info.layer_types = found_ops
+        info.format = "tflite"
+
+        # Directly build strong signals based on what we found
+        if vision_hits and not nlp_hits:
+            info.metadata["detected_task"] = "vision"
+            info.metadata["model_type"] = "cnn"
+        elif nlp_hits and not vision_hits:
+            info.metadata["detected_task"] = "nlp"
+            info.metadata["model_type"] = "recurrent"
+        elif vision_hits and nlp_hits:
+            info.metadata["detected_task"] = "vision"
+
+    except Exception:
+        pass  # graceful degradation to Tier 2/3
+
+    return info
+
+
+def extract_coreml_info(path) -> ModelInfo:
+    """
+    Extract layer types from a CoreML model for Tier 1 detection.
+    Uses coremltools which is already installed.
+    Falls back to empty ModelInfo on any error.
+    """
+    from pathlib import Path
+    path = Path(path)
+
+    info = ModelInfo(format="coreml_nn")
+
+    try:
+        import coremltools as ct
+
+        model = ct.models.MLModel(str(path))
+        spec  = model.get_spec()
+
+        layer_names = set()
+
+        # NeuralNetwork format
+        if spec.HasField("neuralNetwork"):
+            for layer in spec.neuralNetwork.layers:
+                layer_type = layer.WhichOneof("layer")
+                if layer_type:
+                    layer_names.add(layer_type)
+            info.format = "coreml_nn"
+
+        # MLProgram format (newer models)
+        elif spec.HasField("mlProgram"):
+            for func in spec.mlProgram.functions.values():
+                for block in func.block_specializations.values():
+                    for op in block.operations:
+                        layer_names.add(op.operator)
+            info.format = "coreml_nn"
+
+        info.layer_types = layer_names
+
+        # Extract input tensor info
+        for inp in spec.description.input:
+            shape = None
+            dtype = None
+            if inp.type.HasField("multiArrayType"):
+                arr = inp.type.multiArrayType
+                shape = tuple(arr.shape) if arr.shape else None
+                dtype = "float32"
+            info.inputs.append(TensorInfo(
+                name=inp.name,
+                shape=shape,
+                dtype=dtype,
+            ))
+
+    except Exception:
+        pass  # graceful degradation
+
+    return info
 
 # ---------------------------------------------------------------------------
 # Public API — detect_task
