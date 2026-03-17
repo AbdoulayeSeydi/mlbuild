@@ -49,7 +49,6 @@ console = Console()
 
 @click.group()
 @click.version_option(version="0.2.0", prog_name="mlbuild")
-# --- PATCH: global --strict-output flag ---
 @click.option(
     "--strict-output",
     is_flag=True,
@@ -60,12 +59,79 @@ console = Console()
 def cli(ctx, strict_output):
     """
     MLBuild - Deterministic build system for CoreML models.
-    
+
     Track model performance and prevent regressions in CI.
     """
-    # Store in context so subcommands can read it via ctx.obj
+    import time
     ctx.ensure_object(dict)
     ctx.obj["strict_output"] = strict_output
+    ctx.obj["_start_ms"] = time.monotonic() * 1000
+
+    def _record():
+        try:
+            import uuid
+            import json
+            from datetime import datetime, timezone
+
+            raw_args = sys.argv[1:]
+            if not raw_args:
+                return
+
+            command_name = raw_args[0].lstrip("-")
+
+            if command_name in _EXCLUDED_FROM_HISTORY:
+                return
+
+            duration_ms = int(time.monotonic() * 1000 - ctx.obj["_start_ms"])
+
+            args_dict = {}
+            i = 1
+            while i < len(raw_args):
+                arg = raw_args[i]
+                if arg.startswith("--"):
+                    key = arg.lstrip("-")
+                    if i + 1 < len(raw_args) and not raw_args[i + 1].startswith("--"):
+                        val = raw_args[i + 1]
+                        if len(val) < 200:
+                            args_dict[key] = val
+                        i += 2
+                    else:
+                        args_dict[key] = True
+                        i += 1
+                else:
+                    i += 1
+
+            from ..core.machine import get_machine_info
+            machine = get_machine_info()
+
+            from .. import __version__ as mlbuild_version
+            from ..registry.local import LocalRegistry
+            from datetime import datetime, timezone
+
+            row = {
+                "id":                  str(uuid.uuid4()),
+                "machine_id":          machine["machine_id"],
+                "machine_name":        machine["machine_name"],
+                "platform":            machine["platform"],
+                "command_name":        command_name,
+                "args_json":           json.dumps(args_dict, sort_keys=True),
+                "raw_command":         "mlbuild " + " ".join(raw_args),
+                "linked_build_id":     ctx.obj.get("_linked_build_id"),
+                "linked_benchmark_id": ctx.obj.get("_linked_benchmark_id"),
+                "exit_code":           ctx.obj.get("_exit_code", 0),
+                "error_message":       ctx.obj.get("_error_message"),
+                "duration_ms":         duration_ms,
+                "mlbuild_version":     mlbuild_version,
+                "ran_at":              datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            }
+
+            registry = LocalRegistry()
+            registry.save_command(row)
+
+        except Exception:
+            pass
+
+    ctx.call_on_close(_record)
 
 
 # --- PATCH: helper for commands to merge global + local strict flag ---
@@ -78,6 +144,19 @@ def _resolve_strict(ctx: click.Context, command_flag: bool) -> bool:
         return True
     obj = ctx.find_root().obj or {}
     return bool(obj.get("strict_output", False))
+
+# ------------------------------------------------------------
+# Auto-instrumentation — fires after every command completes
+# ------------------------------------------------------------
+
+# Commands that are non-mutating introspection only.
+# Logging these creates noise in history.
+_EXCLUDED_FROM_HISTORY = frozenset({
+    "history",
+    "doctor",
+    "version",
+    "help",
+})
 
 
 # Lazy-load commands to prevent import errors from breaking the CLI
@@ -472,6 +551,9 @@ cli.add_command(ci_command)
 
 from mlbuild.cli.commands.accuracy import accuracy_command
 cli.add_command(accuracy_command)
+
+from .commands.history import history as history_group
+cli.add_command(history_group)
 
 if __name__ == "__main__":
     cli()

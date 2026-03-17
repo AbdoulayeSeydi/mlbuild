@@ -32,7 +32,7 @@ v6 changes:
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -329,8 +329,45 @@ CREATE INDEX IF NOT EXISTS idx_accuracy_candidate
 
 CREATE INDEX IF NOT EXISTS idx_accuracy_pair
     ON accuracy_checks(baseline_build_id, candidate_build_id);
-"""
 
+
+
+    -- ============================================================
+-- Command Log (v9)
+-- History of every CLI command ever run.
+-- Decoupled from builds/benchmarks — deleting history never
+-- touches build or benchmark data.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS command_log (
+    id               TEXT PRIMARY KEY,
+    machine_id       TEXT NOT NULL,
+    machine_name     TEXT NOT NULL,
+    platform         TEXT NOT NULL,
+    command_name     TEXT NOT NULL,
+    args_json        TEXT NOT NULL CHECK (json_valid(args_json)),
+    raw_command      TEXT NOT NULL,
+    linked_build_id      TEXT,
+    linked_benchmark_id  TEXT,
+    exit_code        INTEGER NOT NULL DEFAULT 0,
+    error_message    TEXT,
+    duration_ms      INTEGER NOT NULL DEFAULT 0,
+    mlbuild_version  TEXT NOT NULL,
+    ran_at           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_time
+    ON command_log(ran_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_cmd
+    ON command_log(command_name);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_build
+    ON command_log(linked_build_id);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_exit
+    ON command_log(exit_code);
+"""
 
 
 # ============================================================
@@ -443,6 +480,44 @@ WHERE id = 1;
 """
 
 # ============================================================
+# Migration: v8 → v9
+# ============================================================
+
+MIGRATION_V8_TO_V9 = """
+CREATE TABLE IF NOT EXISTS command_log (
+    id               TEXT PRIMARY KEY,
+    machine_id       TEXT NOT NULL,
+    machine_name     TEXT NOT NULL,
+    platform         TEXT NOT NULL,
+    command_name     TEXT NOT NULL,
+    args_json        TEXT NOT NULL,
+    raw_command      TEXT NOT NULL,
+    linked_build_id      TEXT,
+    linked_benchmark_id  TEXT,
+    exit_code        INTEGER NOT NULL DEFAULT 0,
+    error_message    TEXT,
+    duration_ms      INTEGER NOT NULL DEFAULT 0,
+    mlbuild_version  TEXT NOT NULL,
+    ran_at           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_time
+    ON command_log(ran_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_cmd
+    ON command_log(command_name);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_build
+    ON command_log(linked_build_id);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_exit
+    ON command_log(exit_code);
+
+UPDATE schema_version SET version = 9, applied_at = datetime('now')
+WHERE id = 1;
+"""
+
+# ============================================================
 # Migration registry — ordered list of all migrations
 # ============================================================
 
@@ -451,6 +526,7 @@ MIGRATIONS: list[tuple[int, int, str]] = [
     (5, 6, MIGRATION_V5_TO_V6),
     (6, 7, MIGRATION_V6_TO_V7),
     (7, 8, MIGRATION_V7_TO_V8),
+    (8, 9, MIGRATION_V8_TO_V9), 
 ]
 
 

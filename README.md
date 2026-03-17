@@ -28,11 +28,11 @@ MLBuild is the missing performance layer for ML CI/CD. While MLflow, DVC, and W&
 | Storage | Local + S3-compatible (AWS S3, R2, B2) |
 | Targets | Apple Silicon, A-series, Android (arm64) |
 | Platform | macOS, Linux (TFLite) |
+| Command history | Local, searchable, filterable |
 
 ---
 
 ## The Problem
-
 ```bash
 # Your CI passes
 pytest              ✓
@@ -52,7 +52,6 @@ Size:     6MB  --> 10MB   (67% larger)
 ---
 
 ## The Solution
-
 ```bash
 # Tag your main branch baseline once
 mlbuild tag create <build_id> main-mobilenet
@@ -86,7 +85,6 @@ Catch latency AND size regressions before they reach production.
 ## Where MLBuild Fits
 
 MLBuild is the missing on-device performance layer in your ML CI/CD stack.
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  ML Training                                                    │
@@ -143,7 +141,6 @@ MLBuild complements your existing stack — it doesn't replace it.
 ---
 
 ## Installation
-
 ```bash
 pip install mlbuild
 mlbuild doctor
@@ -172,7 +169,6 @@ pip install "mlbuild[linux]"
 ---
 
 ## Quick Start
-
 ```bash
 # 1. Build and convert model
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16
@@ -210,7 +206,6 @@ mlbuild tag create <build-id> production
 ```
 
 ### GitHub Actions Integration
-
 ```yaml
 - name: MLBuild CI
   run: |
@@ -240,7 +235,6 @@ See `.github/workflows/mlbuild.yml` for a complete example with PR comment posti
 ### Core Commands
 
 #### Build and Convert
-
 ```bash
 mlbuild build --model model.onnx --target apple_m1 --quantize fp16 --name "v2.0"
 mlbuild build --model model.onnx --target android_arm64 --quantize int8
@@ -251,7 +245,6 @@ mlbuild build --model model.onnx --target android_arm64 --quantize int8
 #### Import Pre-built Models
 
 Register an existing TFLite or CoreML model directly — no conversion required. Once imported, all MLBuild commands (benchmark, profile, compare, report, ci-check) work on it immediately.
-
 ```bash
 # Import a TFLite model
 mlbuild import --model model.tflite --target android_arm64
@@ -290,7 +283,6 @@ Imported builds are marked `[imported]` in `mlbuild log` output and tracked with
 Generate optimized variants of a registered build. Supports quantization and magnitude pruning. All variants are registered as children of the source build with full lineage tracking.
 
 ##### Quantization
-
 ```bash
 # FP16 — recompiles from ONNX graph (lower precision weights)
 mlbuild optimize <build_id> --pass quantize --method fp16
@@ -315,7 +307,6 @@ Static and dynamic INT8 are stored as distinct builds (`int8` vs `int8_static`) 
 ##### Pruning
 
 Magnitude-based unstructured weight pruning. Zeros out the smallest weights by absolute value up to a target sparsity level. No retraining required.
-
 ```bash
 # 50% sparsity
 mlbuild optimize <build_id> --pass prune --sparsity 0.5
@@ -334,7 +325,6 @@ Pruning skips bias, batch norm, and small tensors (< 256 params) automatically. 
 ##### Method chaining
 
 Pruning and quantization can be chained arbitrarily:
-
 ```bash
 # Prune first, then quantize
 mlbuild optimize <build_id> --pass prune --sparsity 0.5
@@ -346,7 +336,6 @@ mlbuild optimize <pruned_build_id> --pass quantize --method int8
 #### Explore
 
 Sweeps all optimization variants for a model in one command. Builds the fp32 baseline, generates fp16 and int8 variants, benchmarks all of them, and assigns verdicts.
-
 ```bash
 # Full sweep (fp16 + int8, all backends)
 mlbuild explore model.onnx --target apple_m1
@@ -369,7 +358,6 @@ mlbuild explore model.onnx --output-json
 ```
 
 **Verdict logic (score-based):**
-
 ```
 score = 0.6 × (baseline_latency / variant_latency)
       + 0.4 × (baseline_size / variant_size)
@@ -382,7 +370,6 @@ score ≤ 1.0  → skip (strictly worse on both axes)
 - `aggressive` — smallest size among remaining candidates
 - `skip` — no improvement, or accuracy check failed
 - `baseline` — fp32 reference
-
 ```
 COREML
   Verdict       Method         Size      p50 Latency   vs Baseline    Accuracy
@@ -398,7 +385,6 @@ COREML
 #### Accuracy
 
 Standalone output divergence check between two builds. Runs inference on both with synthetic inputs and computes similarity metrics.
-
 ```bash
 mlbuild accuracy <baseline_id> <candidate_id>
 mlbuild accuracy <baseline_id> <candidate_id> --samples 64 --seed 42
@@ -424,7 +410,6 @@ fp32 → int8:  cosine=0.9983  top1=0.97   passed=False (< 0.99 threshold)
 ---
 
 #### Benchmark
-
 ```bash
 mlbuild benchmark <build-id> --runs 100 --warmup 20 --json
 mlbuild benchmark <build-id> --compute-unit CPU_ONLY
@@ -435,7 +420,6 @@ mlbuild benchmark <build-id> --compute-unit CPU_ONLY
 #### Validate SLAs
 
 Validates a build against performance and accuracy constraints. All checks compose in a single command.
-
 ```bash
 # Performance constraints only
 mlbuild validate <build_id> --max-latency 10 --max-size 8
@@ -475,7 +459,6 @@ Exit codes: `0` = all constraints passed, `1` = one or more violations.
 ---
 
 #### Compare and Detect Regressions
-
 ```bash
 # Compare with independent latency + size thresholds
 mlbuild compare baseline candidate \
@@ -507,7 +490,6 @@ mlbuild ci-check baseline candidate --json
 #### CI Orchestration
 
 Full CI check in one command — resolves baseline, explores variants, compares, enforces thresholds, and writes a structured report.
-
 ```bash
 # Run full CI check against a tagged baseline
 mlbuild ci --model mobilenet.onnx --baseline main-mobilenet
@@ -561,7 +543,6 @@ mlbuild ci --baseline 3f36810e         # build ID prefix
 | `--json` | Print JSON report to stdout | false |
 
 **CI Report** — always written to `.mlbuild/ci_report.json`:
-
 ```json
 {
   "model": "mobilenet.onnx",
@@ -610,7 +591,6 @@ top1_threshold = 0.99
 ---
 
 #### Quantization Tradeoff Analysis
-
 ```bash
 mlbuild compare-quantization fp32-build int8-build
 mlbuild compare-quantization fp32-build int8-build --accuracy-samples 100
@@ -620,7 +600,6 @@ mlbuild compare-quantization fp32-build int8-build --json
 ---
 
 #### Performance Report
-
 ```bash
 mlbuild report <build-id>
 mlbuild report <build-id> --open
@@ -631,7 +610,6 @@ mlbuild report <build-id> --format pdf        # requires: pip install weasyprint
 ---
 
 #### Deep Profiling
-
 ```bash
 # TFLite: full 6-feature deep profile (no device required)
 mlbuild profile <build-id> --deep
@@ -659,7 +637,6 @@ mlbuild profile <build-id> --deep --int8-build <id>  # TFLite: quant sensitivity
 ---
 
 #### Build History
-
 ```bash
 # All builds
 mlbuild log
@@ -686,7 +663,6 @@ mlbuild log --csv builds.csv
 ```
 
 The `--tree` flag renders the full optimization DAG using actual parent-child lineage. Method chaining (e.g. prune → int8) shows as nested children, not flat siblings — causality is preserved:
-
 ```
 3f36810e  mobilenet  coreml  fp32  13.39 MB  2.49ms
 ├── b8aa1ef6  coreml  fp16  6.74 MB  0.74ms
@@ -701,8 +677,43 @@ Method labels are human-readable: `prune(0.50)`, `int8(static)` instead of raw i
 
 ---
 
-#### Version Management
+#### Command History
 
+A permanent log of every MLBuild command ever run. Searchable, filterable, deletable.
+```bash
+# Show all recent commands
+mlbuild history
+
+# Filter by command type
+mlbuild history --filter build
+mlbuild history --filter benchmark
+mlbuild history --filter validate
+mlbuild history --filter compare
+mlbuild history --filter failed
+
+# Filter by time
+mlbuild history --since yesterday
+mlbuild history --since "7 days ago"
+mlbuild history --since "2024-01-01"
+
+# Filter by build ID — everything that touched a specific build
+mlbuild history --build-id a3f91c2
+
+# Limit results
+mlbuild history --limit 100
+
+# Delete one entry by ID (min 4 chars)
+mlbuild history delete d58cc62f
+
+# Clear all history (prompts for confirmation)
+mlbuild history clear
+```
+
+History is an audit log of CLI actions — separate from build and benchmark data. Deleting a history entry never touches builds or benchmarks.
+
+---
+
+#### Version Management
 ```bash
 mlbuild log --limit 20
 mlbuild diff build-a build-b
@@ -710,7 +721,6 @@ mlbuild tag create <build-id> v1.0.0
 ```
 
 #### Experiment Tracking
-
 ```bash
 mlbuild experiment create "quantization-search"
 mlbuild run start --experiment "quantization-search"
@@ -720,7 +730,6 @@ mlbuild run end
 ```
 
 #### Remote Storage
-
 ```bash
 # Set up S3-compatible remote (one-time)
 mlbuild remote add prod \
@@ -751,7 +760,6 @@ Detection runs through three tiers in order of confidence:
 | **Graph** | Op/layer analysis (`Conv`, `Attention`, `STFT`, etc.) | ONNX, CoreML NN | High | Silent |
 | **Name** | Tensor name heuristics (`input_ids`, `pixel_values`, `mel`) | All | Medium | Warning |
 | **Shape** | Dtype + rank heuristics (rank-4 float = vision, rank-2 int = NLP) | All | Low | Warning + zeros fallback |
-
 ```bash
 # High confidence — silent, correct inputs generated automatically
 mlbuild benchmark <build-id>
@@ -767,7 +775,6 @@ mlbuild benchmark <build-id>
 ```
 
 ### Override with `--task`
-
 ```bash
 mlbuild benchmark <build-id> --task vision
 mlbuild benchmark <build-id> --task nlp
@@ -789,7 +796,6 @@ mlbuild validate <build-id> --task vision --strict-output
 ### NLP Multi-Sequence Benchmarking
 
 NLP models are benchmarked across a sequence length ladder by default:
-
 ```bash
 # Default ladder: [16, 64, 128, 256]
 mlbuild benchmark <build-id> --task nlp
@@ -804,7 +810,6 @@ mlbuild benchmark <build-id> --task nlp --seq-len 128
 ```
 
 ### Strict Output Validation
-
 ```bash
 # Soft mode (default) — warns but proceeds
 mlbuild benchmark <build-id> --task nlp
@@ -822,7 +827,6 @@ mlbuild --strict-output benchmark <build-id> --task nlp
 ## Optimization Workflow
 
 A complete optimization workflow from ONNX to deployment-ready model:
-
 ```bash
 # 1. Build FP32 baseline
 mlbuild build --model mobilenet.onnx --target apple_m1 --name mobilenet
@@ -850,7 +854,6 @@ mlbuild tag create <final_id> production-v2
 ---
 
 ## CI/CD Regression Gate
-
 ```bash
 # Full CI orchestration (recommended)
 mlbuild ci --model mobilenet.onnx --baseline main-mobilenet
@@ -874,7 +877,6 @@ mlbuild ci --build $BUILD_ID --baseline main-mobilenet --json
 ---
 
 ## Architecture
-
 ```
 Training Phase
 ├── Experiment Tracking:   MLflow / W&B / Neptune
@@ -899,7 +901,6 @@ Production Phase
 ## How It Works
 
 ### 1. Deterministic Builds
-
 ```python
 # Content-addressed storage (Git-style)
 build_id = sha256(source_hash + config_hash + env_fingerprint)
@@ -909,7 +910,6 @@ build_id = sha256(source_hash + config_hash + env_fingerprint)
 ### 2. Build Lineage Tracking
 
 Every variant stores its full ancestry:
-
 ```python
 build.parent_build_id      # direct parent
 build.root_build_id        # original source in the chain
@@ -919,7 +919,6 @@ build.optimization_method  # "fp16", "int8", "int8_static", "prune_0.50"
 Identical optimization chains always produce the same build ID — deduplication is automatic.
 
 ### 3. Automated Benchmarking
-
 ```python
 # Runs N iterations with warmup
 # Calculates p50, p95, p99, mean, std
@@ -928,7 +927,6 @@ Identical optimization chains always produce the same build ID — deduplication
 ```
 
 ### 4. Task-Aware Input Generation
-
 ```python
 # Three-tier detection: graph ops → tensor names → shapes
 # Task-specific synthetic inputs (never zeros for known tasks)
@@ -937,7 +935,6 @@ Identical optimization chains always produce the same build ID — deduplication
 ```
 
 ### 5. Output Divergence Checking
-
 ```python
 # Cosine similarity — output direction preservation
 # MAE / max absolute error — per-element differences
@@ -947,7 +944,6 @@ Identical optimization chains always produce the same build ID — deduplication
 ```
 
 ### 6. Dual Regression Detection
-
 ```python
 # Independent thresholds for latency and size
 latency_regression = latency_change_pct > latency_threshold
@@ -956,7 +952,6 @@ regression_detected = latency_regression or size_regression
 ```
 
 ### 7. Explore Verdict Scoring
-
 ```python
 score = 0.6 * (baseline_latency / variant_latency) \
       + 0.4 * (baseline_size / variant_size)
@@ -1031,6 +1026,13 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - Filter by name, format, task, target, date range, roots-only
 - JSON and CSV export
 
+### Command History
+- `mlbuild history` — permanent audit log of every CLI command ever run
+- Searchable by command type, time window, build ID
+- Filterable: build, benchmark, validate, compare, profile, failed
+- Delete individual entries or clear all — never affects build or benchmark data
+- Machine identity captured on every row — ready for cross-machine team view when cloud login lands
+
 ### Performance Reports
 - Self-contained HTML (no external dependencies)
 - Benchmark history table
@@ -1060,7 +1062,6 @@ score = 0.6 * (baseline_latency / variant_latency) \
 ---
 
 ## Project Structure
-
 ```
 mlbuild/
 ├── src/mlbuild/
@@ -1077,6 +1078,7 @@ mlbuild/
 │   │   │   ├── doctor.py                 # mlbuild doctor
 │   │   │   ├── experiment.py             # mlbuild experiment
 │   │   │   ├── explore.py                # mlbuild explore
+│   │   │   ├── history.py                # mlbuild history
 │   │   │   ├── import_cmd.py             # mlbuild import
 │   │   │   ├── log.py                    # mlbuild log
 │   │   │   ├── optimize.py               # mlbuild optimize
@@ -1112,6 +1114,7 @@ mlbuild/
 │   │   ├── errors.py                     # Error types
 │   │   ├── format_detection.py           # Format detection + target validation
 │   │   ├── hash.py                       # Deterministic artifact hashing
+│   │   ├── machine.py                    # Machine identity (UUID + hostname)
 │   │   ├── task_detection.py             # Three-tier task detection
 │   │   ├── task_inputs.py                # Task-aware synthetic input generation
 │   │   ├── task_validation.py            # Post-inference output validation
@@ -1133,7 +1136,7 @@ mlbuild/
 │   ├── profiling/                        # Layer-by-layer profiling + cold start
 │   ├── registry/
 │   │   ├── local.py                      # SQLite registry (WAL mode)
-│   │   └── schema.py                     # Schema + migrations (v8)
+│   │   └── schema.py                     # Schema + migrations (v9)
 │   ├── storage/                          # S3-compatible remote storage
 │   ├── validation/
 │   │   └── accuracy_validator.py         # AccuracyValidator for mlbuild validate
@@ -1164,7 +1167,6 @@ Use MLflow/W&B for training experiments. Use MLBuild for on-device inference per
 ---
 
 ## Development
-
 ```bash
 git clone https://github.com/AbdoulayeSeydi/mlbuild.git
 cd mlbuild
@@ -1172,7 +1174,6 @@ python -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
 ```
-
 ```bash
 pytest tests/
 ```
@@ -1192,12 +1193,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 ## Roadmap
-
-### ✅ Cross-Platform Support *(shipped in v0.3.0)*
-- `coremltools` and `torch` are now optional — `pip install mlbuild` works on Linux without crashing
-- `mlbuild[linux]` installs the TFLite-only stack for CI environments
-- `mlbuild doctor` shows CoreML/torch as `— (macOS only)` on Linux instead of failures
-- Platform guards in CLI surface clear error messages for CoreML commands on non-macOS
 
 ### Phase 1 — Device-Connected Benchmarking *(next)*
 - Android ADB bridge — benchmark on connected Android devices without Android Studio

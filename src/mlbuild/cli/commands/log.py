@@ -83,6 +83,13 @@ def safe_hash(value: Optional[str], full: bool) -> str:
 def is_imported(build: "Build") -> bool:
     return build.backend_versions.get("imported") == "true"
 
+def get_machine_name(build: "Build") -> str:
+    """Extract machine hostname from environment_data."""
+    try:
+        node = build.environment_data.get("hardware", {}).get("cpu", {}).get("node", "") or ""
+        return node.replace(".local", "")
+    except Exception:
+        return ""
 
 def display_task(build: "Build") -> str:
     return getattr(build, "task_type", None) or "unknown"
@@ -436,6 +443,18 @@ def log(
         # -------------------------
         # Rich Table View
         # -------------------------
+
+        # Detect multiple machines — only show column if builds came from more than one machine
+        # uses environment_data node as display, but detection is smarter
+        # Since old builds don't have machine_id in environment_data,
+        # fall back to hostname but normalize it
+        machine_names = [get_machine_name(b) for b in builds]
+        try:
+            distinct_machines = registry.get_distinct_machines()
+            show_machine = len(distinct_machines) > 1
+        except Exception:
+            show_machine = False
+
         table = Table(
             title=f"Builds (showing {len(builds)}, offset {offset})"
         )
@@ -448,6 +467,8 @@ def log(
         table.add_column("Task", style="magenta")
         table.add_column("Size", justify="right")
         table.add_column("p50 Latency", justify="right")
+        if show_machine:
+            table.add_column("Machine", style="dim")
         table.add_column("Created", style="dim")
 
         if show_hashes:
@@ -455,7 +476,7 @@ def log(
             table.add_column("Source Hash", style="magenta")
             table.add_column("Config Hash", style="magenta")
 
-        for b in builds:
+        for b, machine_name in zip(builds, machine_names):
             data = b.to_public_dict(include_hashes=show_hashes)
 
             display_name = data["name"] or "(unnamed)"
@@ -475,8 +496,12 @@ def log(
                 display_task(b),
                 humanize_bytes(data["size_bytes"]),
                 latency_str,
-                format_iso8601(data["created_at"]),
             ]
+
+            if show_machine:
+                row.append(machine_name or "—")
+
+            row.append(format_iso8601(data["created_at"]))
 
             if show_hashes:
                 row += [

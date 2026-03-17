@@ -38,6 +38,38 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ------------------------------------------------------------
 
+def _parse_since(since: str) -> datetime | None:
+    """
+    Parse human-readable since strings to UTC datetime.
+    Supports: 'yesterday', 'N days ago', 'YYYY-MM-DD'
+    Returns None if unparseable.
+    """
+    import re
+    from datetime import timedelta
+
+    since = since.strip().lower()
+    now = datetime.now(timezone.utc)
+
+    if since == "yesterday":
+        return (now - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    match = re.match(r"(\d+)\s+days?\s+ago", since)
+    if match:
+        days = int(match.group(1))
+        return (now - timedelta(days=days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
+    try:
+        dt = datetime.strptime(since, "%Y-%m-%d")
+        return dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+
+    return None
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -701,6 +733,183 @@ class LocalRegistry:
             return build, tag_or_id
         build = self.resolve_build(tag_or_id)
         return build, None
+    
+    # ------------------------------------------------------------
+    # Command Log
+    # ------------------------------------------------------------
+
+    def save_command(self, row: dict) -> None:
+        """
+        Insert one row into command_log.
+        Always fails silently — history logging never surfaces errors
+        or affects the result of the actual command.
+        """
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO command_log (
+                        id, machine_id, machine_name, platform,
+                        command_name, args_json, raw_command,
+                        linked_build_id, linked_benchmark_id,
+                        exit_code, error_message, duration_ms,
+                        mlbuild_version, ran_at
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        row["id"],
+                        row["machine_id"],
+                        row["machine_name"],
+                        row["platform"],
+                        row["command_name"],
+                        row["args_json"],
+                        row["raw_command"],
+                        row.get("linked_build_id"),
+                        row.get("linked_benchmark_id"),
+                        row.get("exit_code", 0),
+                        row.get("error_message"),
+                        row.get("duration_ms", 0),
+                        row["mlbuild_version"],
+                        row["ran_at"],
+                    ),
+                )
+        except Exception:
+            pass
+
+    def get_history(
+        self,
+        command_name: str | None = None,
+        since=None,
+        build_id: str | None = None,
+        limit: int = 50,
+        failed_only: bool = False,
+    ) -> list[dict]:
+        if limit < 1 or limit > 1000:
+            limit = 50
+
+        where_clauses = []
+        params: list = []
+
+        if command_name:
+            where_clauses.append("command_name = ?")
+            params.append(command_name)
+
+        if failed_only:
+            where_clauses.append("exit_code != 0")
+
+        if build_id:
+            where_clauses.append("linked_build_id LIKE ? || '%'")
+            params.append(build_id)
+
+        if since is not None:
+            # Accept either a datetime object or an ISO string
+            if isinstance(since, datetime):
+                since_str = since.isoformat().replace("+00:00", "Z")
+            else:
+                since_str = since
+            where_clauses.append("ran_at >= ?")
+            params.append(since_str)
+
+        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+        params.append(limit)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM command_log
+                WHERE {where_sql}
+                ORDER BY ran_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_command(self, short_id: str) -> bool:
+        """
+        Delete one row from command_log by short UUID prefix.
+        Minimum 4 characters enforced.
+        Returns True if deleted, False if not found.
+        Raises InternalError if prefix is ambiguous.
+        Touches nothing outside command_log — builds and benchmarks unaffected.
+        """
+        if len(short_id) < 4:
+            raise InternalError(
+                f"Prefix too short: '{short_id}'. Use at least 4 characters."
+            )
+
+        with self._connect() as conn:
+            matches = conn.execute(
+                "SELECT id, command_name, ran_at FROM command_log WHERE id LIKE ? || '%'",
+                (short_id,),
+            ).fetchall()
+
+            if not matches:
+                return False
+
+            if len(matches) > 1:
+                raise InternalError(
+                    f"Prefix '{short_id}' matches {len(matches)} entries. "
+                    f"Use a longer ID."
+                )
+
+            conn.execute(
+                "DELETE FROM command_log WHERE id = ?",
+                (matches[0]["id"],),
+            )
+            return True
+
+    def clear_history(self) -> int:
+        """
+        Delete all rows from command_log.
+        Returns count of deleted rows.
+        Touches nothing outside command_log — builds and benchmarks unaffected.
+        """
+        with self._connect() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM command_log"
+            ).fetchone()[0]
+            conn.execute("DELETE FROM command_log")
+            return count
+
+    def get_distinct_machines(self) -> list[str]:
+        """
+        Returns distinct machine_name values from command_log.
+        Used by mlbuild log to decide whether to show machine column.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT machine_name FROM command_log"
+            ).fetchall()
+            return [r["machine_name"] for r in rows]
+        
+    def get_history_by_prefix(self, prefix: str) -> list[dict]:
+        """Get history entries matching an ID prefix."""
+        if len(prefix) < 4:
+            raise InternalError(
+                f"Prefix too short: '{prefix}'. Use at least 4 characters."
+            )
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM command_log WHERE id LIKE ? || '%' ORDER BY ran_at DESC",
+                (prefix,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_history(self, full_id: str) -> bool:
+        """Delete one row from command_log by full ID."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM command_log WHERE id = ?", (full_id,))
+            return True
+
+    def count_history(self) -> int:
+        """Return total number of rows in command_log."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM command_log"
+            ).fetchone()[0]
 
     # ------------------------------------------------------------
     # Row Mapping
