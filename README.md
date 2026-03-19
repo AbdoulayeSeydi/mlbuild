@@ -28,7 +28,10 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Storage | Local + S3-compatible (AWS S3, R2, B2) |
 | Targets | Apple Silicon, A-series, Android (arm64) |
 | Platform | macOS, Linux (TFLite) |
-| Command history | Local, searchable, filterable |
+| Command history | Local, searchable, filterable by every command |
+| Performance budget | Persistent constraints in .mlbuild/budget.toml |
+| Baseline management | Reserved tag with clean CLI |
+| Workspace status | Quick health snapshot |
 
 ---
 
@@ -690,12 +693,17 @@ A permanent log of every MLBuild command ever run. Searchable, filterable, delet
 # Show all recent commands
 mlbuild history
 
-# Filter by command type
+# Filter by command type — every command is filterable
 mlbuild history --filter build
 mlbuild history --filter benchmark
 mlbuild history --filter validate
+mlbuild history --filter baseline
+mlbuild history --filter budget
+mlbuild history --filter status
+mlbuild history --filter import
 mlbuild history --filter compare
 mlbuild history --filter failed
+# ...and all other commands (accuracy, ci, diff, explore, optimize, profile, etc.)
 
 # Filter by time
 mlbuild history --since yesterday
@@ -717,6 +725,101 @@ mlbuild history clear
 
 History is an audit log of CLI actions — separate from build and benchmark data. Deleting a history entry never touches builds or benchmarks.
 
+---
+
+---
+
+#### Performance Budget
+
+Persistent performance constraints committed to git. Set once, enforced automatically by `mlbuild validate` and `mlbuild ci`. Explicit flags always override budget values.
+```bash
+# Set constraints once
+mlbuild budget set --max-latency 10 --max-p95 15 --max-size 8
+
+# Show current budget
+mlbuild budget show
+
+# Preview what would apply to a build without benchmarking
+mlbuild budget validate <build_id>
+
+# Update one constraint without touching others
+mlbuild budget set --max-latency 5
+
+# Remove one constraint
+mlbuild budget clear --constraint max-latency
+
+# Remove all constraints (prompts for confirmation)
+mlbuild budget clear
+
+# After budget is set, validate uses it automatically
+mlbuild validate <build_id>           ← uses budget
+mlbuild validate <build_id> --max-latency 3  ← overrides latency, budget for rest
+```
+
+Budget is stored in `.mlbuild/budget.toml` — commit it so your whole team enforces the same constraints automatically.
+
+**Merge priority:** explicit CLI flag > budget file > no constraint
+
+**Violation output** shows the source of each constraint:
+```
+┃ Constraint     ┃   Limit ┃  Actual ┃     Violation       ┃        Source ┃
+│ max_latency_ms │ 1.00 ms │ 2.66 ms │ +1.66 (166% over)   │ explicit flag │
+│ max_size_mb    │ 8.00 MB │ 9.10 MB │ +1.10 (13.8% over)  │ budget        │
+```
+
+---
+
+#### Baseline Management
+
+Clean UX wrapper around `mlbuild tag`. Uses the reserved tag `mlbuild-baseline` so `mlbuild ci` resolves it automatically — zero CI changes required.
+```bash
+# Set a build as the performance baseline
+mlbuild baseline set <build_id>
+
+# Show current baseline
+mlbuild baseline
+mlbuild baseline show
+
+# Show all baseline-style tags (mlbuild-baseline, main-*, production-*)
+mlbuild baseline history
+
+# Remove baseline (prompts for confirmation)
+mlbuild baseline unset
+```
+
+The baseline integrates directly with `mlbuild ci`:
+```bash
+mlbuild ci --model model.onnx --baseline mlbuild-baseline
+```
+
+Prompts before overwriting an existing baseline. Use `--force` to skip the prompt.
+
+---
+
+#### Workspace Status
+
+Quick health check of the current workspace. Reads from existing data — no new storage.
+```bash
+mlbuild status
+mlbuild status --json
+```
+
+Output:
+```
+MLBuild Status  Abdoulayes-MacBook-Air.local
+
+  ✓ Workspace    .mlbuild/
+  ✓ Registry     26 builds  |  18 benchmarks
+  Last build:  mobilenet (coreml, 3.58 MB) — 2h ago
+  Last bench:  p50=2.61 ms — 2h ago
+
+  ✓ Baseline     3fa9371209e6  mobilenet  2.61 ms  3.58 MB
+  Last validate: PASSED — 52m ago
+
+  ✓ Budget       .mlbuild/budget.toml
+    Max latency (p50)    10.0 ms
+    Max size             8.0 MB
+```
 ---
 
 #### Version Management
@@ -1041,6 +1144,27 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - Delete individual entries or clear all — never affects build or benchmark data
 - Machine identity captured on every row — ready for cross-machine team view when cloud login lands
 
+### Performance Budget
+- `mlbuild budget set/show/clear/validate` — persistent constraint management
+- Stored in `.mlbuild/budget.toml` — commit to git for team-wide enforcement
+- Merge logic: explicit CLI flag > budget > no constraint
+- Constraint source shown in violation output (`budget` vs `explicit flag`)
+- All four constraints: `max_latency_ms`, `max_p95_ms`, `max_memory_mb`, `max_size_mb`
+- Applied automatically by `mlbuild validate` and `mlbuild ci`
+- `budget validate <build_id>` — dry run, evaluates size immediately, flags latency as pending
+
+### Baseline Management
+- `mlbuild baseline set/show/unset/history` — clean UX wrapper around `mlbuild tag`
+- Uses reserved tag `mlbuild-baseline` — integrates with `mlbuild ci` automatically
+- Prompts before overwriting existing baseline
+- `baseline history` — shows all baseline-style tags: `mlbuild-baseline`, `main-*`, `production-*`
+
+### Workspace Status
+- `mlbuild status` — instant workspace health snapshot
+- Shows build/benchmark counts, last build, last benchmark, last validate result
+- Shows current baseline and active budget constraints
+- JSON output via `--json` for scripting
+
 ### Performance Reports
 - Self-contained HTML (no external dependencies)
 - Benchmark history table
@@ -1076,10 +1200,12 @@ mlbuild/
 │   ├── cli/
 │   │   ├── commands/
 │   │   │   ├── accuracy.py               # mlbuild accuracy
-│   │   │   ├── ci.py                     # mlbuild ci
+│   │   │   ├── baseline.py               # mlbuild baseline
 │   │   │   ├── benchmark.py              # mlbuild benchmark
+│   │   │   ├── budget.py                 # mlbuild budget
 │   │   │   ├── build.py                  # mlbuild build
-│   │   │   ├── compare.py                # mlbuild compare + ci-check
+│   │   │   ├── ci.py                     # mlbuild ci + ci-check
+│   │   │   ├── compare.py                # mlbuild compare
 │   │   │   ├── compare_compute_units.py  # mlbuild compare-compute-units
 │   │   │   ├── compare_quantization.py   # mlbuild compare-quantization
 │   │   │   ├── diff.py                   # mlbuild diff
@@ -1096,6 +1222,7 @@ mlbuild/
 │   │   │   ├── remote.py                 # mlbuild remote
 │   │   │   ├── report.py                 # mlbuild report
 │   │   │   ├── run.py                    # mlbuild run
+│   │   │   ├── status.py                 # mlbuild status
 │   │   │   ├── sync.py                   # mlbuild sync
 │   │   │   ├── tag.py                    # mlbuild tag
 │   │   │   └── validate.py               # mlbuild validate
@@ -1106,22 +1233,26 @@ mlbuild/
 │   │   ├── coreml/                       # CoreML exporter + deep profiler
 │   │   ├── tflite/                       # TFLite backend + deep profiler
 │   │   └── onnxruntime/                  # ONNX Runtime backend
-│   ├── benchmark/                        # Benchmark runner + stats
+│   ├── benchmark/
+│   │   ├── runner.py                     # Benchmark runner + stats
+│   │   └── device_runner.py              # Device benchmark runner
 │   ├── core/
+│   │   ├── budget.py                     # Budget load/save/merge/validate
 │   │   ├── accuracy/
-│   │   ├── ci/
-│   │   │   ├── reporter.py               # CIReport + text/JSON/markdown formatters
-│   │   │   ├── runner.py                 # CIRunner orchestration
-│   │   │   └── thresholds.py             # ThresholdConfig + violation evaluation
 │   │   │   ├── calibration.py            # CalibrationLoader (images/npy/npz)
 │   │   │   ├── checker.py                # run_accuracy_check()
 │   │   │   ├── config.py                 # AccuracyConfig, AccuracyResult
 │   │   │   ├── inputs.py                 # InputSpec, generate_batch
 │   │   │   └── metrics.py                # cosine_similarity, MAE, top-1
+│   │   ├── ci/
+│   │   │   ├── reporter.py               # CIReport + text/JSON/markdown formatters
+│   │   │   ├── runner.py                 # CIRunner orchestration
+│   │   │   └── thresholds.py             # ThresholdConfig + violation evaluation
 │   │   ├── environment.py                # Environment fingerprinting
 │   │   ├── errors.py                     # Error types
 │   │   ├── format_detection.py           # Format detection + target validation
 │   │   ├── hash.py                       # Deterministic artifact hashing
+│   │   ├── ir.py                         # ModelIR — format-agnostic model graph
 │   │   ├── machine.py                    # Machine identity (UUID + hostname)
 │   │   ├── task_detection.py             # Three-tier task detection
 │   │   ├── task_inputs.py                # Task-aware synthetic input generation
@@ -1131,7 +1262,9 @@ mlbuild/
 │   ├── experiments/                      # Experiment + run tracking
 │   ├── explore/
 │   │   └── explorer.py                   # explore(), assign_verdicts(), accuracy integration
-│   ├── loaders/                          # ONNX model loading
+│   ├── loaders/
+│   │   ├── loader.py                     # Model loading entrypoint
+│   │   └── onnx_loader.py                # ONNX loader + ModelIR builder
 │   ├── optimize/
 │   │   ├── optimizer.py                  # optimize() + prune() entrypoints
 │   │   ├── passes/
@@ -1141,14 +1274,23 @@ mlbuild/
 │   │       ├── coreml_backend.py         # compile_from_graph, quantize_weights,
 │   │       │                             # quantize_weights_static, prune_weights
 │   │       └── tflite_backend.py         # quantize_from_graph
-│   ├── profiling/                        # Layer-by-layer profiling + cold start
+│   ├── profiling/
+│   │   ├── cold_start.py                 # Cold start decomposition
+│   │   ├── layer_profiler.py             # Per-layer timing
+│   │   ├── memory_profiler.py            # Memory tracking
+│   │   └── warmup_analyzer.py            # Warmup analysis
 │   ├── registry/
 │   │   ├── local.py                      # SQLite registry (WAL mode)
 │   │   └── schema.py                     # Schema + migrations (v9)
-│   ├── storage/                          # S3-compatible remote storage
+│   ├── storage/
+│   │   ├── backend.py                    # Storage backend interface
+│   │   ├── config.py                     # Remote config
+│   │   ├── local.py                      # Local storage
+│   │   └── s3.py                         # S3-compatible storage
 │   ├── validation/
 │   │   └── accuracy_validator.py         # AccuracyValidator for mlbuild validate
-│   └── visualization/                    # Chart generation
+│   └── visualization/
+│       └── charts.py                     # Chart generation
 ├── tests/
 ├── pyproject.toml
 └── README.md
