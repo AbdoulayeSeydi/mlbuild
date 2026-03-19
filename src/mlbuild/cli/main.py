@@ -558,5 +558,8 @@ cli.add_command(history_group)
 from .commands.import_cmd import import_cmd
 cli.add_command(import_cmd, name="import")
 
+from .commands.budget import budget as budget_group
+cli.add_command(budget_group)
+
 if __name__ == "__main__":
     cli()

@@ -35,7 +35,7 @@ except ImportError:
 # TYPES
 # ---------------------------------------------------------------------
 
-Metric = Literal["latency", "size", "accuracy_cosine", "accuracy_top1"]
+Metric = Literal["latency", "latency_p95", "memory", "size", "accuracy_cosine", "accuracy_top1"]
 Rule = Literal["regression", "budget", "accuracy"]
 
 
@@ -91,6 +91,8 @@ class ThresholdConfig:
 
     # Absolute budgets
     latency_budget_ms: Optional[float] = None
+    p95_budget_ms:     Optional[float] = None
+    memory_budget_mb:  Optional[float] = None
     size_budget_mb: Optional[float] = None
 
     # Accuracy thresholds
@@ -116,6 +118,12 @@ class ThresholdConfig:
 
         if self.latency_budget_ms is not None and self.latency_budget_ms < 0:
             raise ValueError("latency_budget_ms must be >= 0")
+
+        if self.p95_budget_ms is not None and self.p95_budget_ms < 0:
+            raise ValueError("p95_budget_ms must be >= 0")
+
+        if self.memory_budget_mb is not None and self.memory_budget_mb < 0:
+            raise ValueError("memory_budget_mb must be >= 0")
 
         if self.size_budget_mb is not None and self.size_budget_mb < 0:
             raise ValueError("size_budget_mb must be >= 0")
@@ -159,6 +167,12 @@ class ThresholdConfig:
             latency_budget_ms=(
                 float(ci["latency_budget_ms"]) if "latency_budget_ms" in ci else None
             ),
+            p95_budget_ms=(
+                float(ci["p95_budget_ms"]) if "p95_budget_ms" in ci else None
+            ),
+            memory_budget_mb=(
+                float(ci["memory_budget_mb"]) if "memory_budget_mb" in ci else None
+            ),
             size_budget_mb=(
                 float(ci["size_budget_mb"]) if "size_budget_mb" in ci else None
             ),
@@ -175,6 +189,8 @@ class ThresholdConfig:
         latency_regression_pct: Optional[float] = None,
         size_regression_pct: Optional[float] = None,
         latency_budget_ms: Optional[float] = None,
+        p95_budget_ms: Optional[float] = None,
+        memory_budget_mb: Optional[float] = None,
         size_budget_mb: Optional[float] = None,
         cosine_threshold: Optional[float] = None,
         top1_threshold: Optional[float] = None,
@@ -193,6 +209,12 @@ class ThresholdConfig:
 
         if latency_budget_ms is not None:
             overrides["latency_budget_ms"] = float(latency_budget_ms)
+
+        if p95_budget_ms is not None:
+            overrides["p95_budget_ms"] = float(p95_budget_ms)
+
+        if memory_budget_mb is not None:
+            overrides["memory_budget_mb"] = float(memory_budget_mb)
 
         if size_budget_mb is not None:
             overrides["size_budget_mb"] = float(size_budget_mb)
@@ -215,6 +237,8 @@ class ThresholdConfig:
         candidate_latency: Optional[float],
         baseline_size: float,
         candidate_size: float,
+        candidate_p95_latency: Optional[float] = None,
+        candidate_memory_mb: Optional[float] = None,
         cosine_similarity: Optional[float] = None,
         top1_agreement: Optional[float] = None,
     ) -> List[ThresholdViolation]:
@@ -283,6 +307,38 @@ class ThresholdConfig:
                 )
 
         # -------------------------------------------------------------
+        # P95 LATENCY BUDGET
+        # -------------------------------------------------------------
+
+        if self.p95_budget_ms is not None and candidate_p95_latency is not None:
+            if candidate_p95_latency > self.p95_budget_ms:
+                violations.append(
+                    ThresholdViolation(
+                        metric="latency_p95",
+                        rule="budget",
+                        actual=round(candidate_p95_latency, 4),
+                        threshold=self.p95_budget_ms,
+                        unit="ms",
+                    )
+                )
+
+        # -------------------------------------------------------------
+        # MEMORY BUDGET
+        # -------------------------------------------------------------
+
+        if self.memory_budget_mb is not None and candidate_memory_mb is not None:
+            if candidate_memory_mb > self.memory_budget_mb:
+                violations.append(
+                    ThresholdViolation(
+                        metric="memory",
+                        rule="budget",
+                        actual=round(candidate_memory_mb, 4),
+                        threshold=self.memory_budget_mb,
+                        unit="MB",
+                    )
+                )
+
+        # -------------------------------------------------------------
         # SIZE BUDGET
         # -------------------------------------------------------------
 
@@ -334,6 +390,8 @@ class ThresholdConfig:
         candidate_latency,
         baseline_size,
         candidate_size,
+        candidate_p95_latency=None,
+        candidate_memory_mb=None,
         cosine_similarity=None,
         top1_agreement=None,
     ):
@@ -343,6 +401,8 @@ class ThresholdConfig:
             candidate_latency=candidate_latency,
             baseline_size=baseline_size,
             candidate_size=candidate_size,
+            candidate_p95_latency=candidate_p95_latency,
+            candidate_memory_mb=candidate_memory_mb,
             cosine_similarity=cosine_similarity,
             top1_agreement=top1_agreement,
         )

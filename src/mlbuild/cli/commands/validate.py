@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from pathlib import Path
+from types import SimpleNamespace
 
 from ...registry import LocalRegistry
 from ...benchmark.runner import CoreMLBenchmarkRunner, ComputeUnit
@@ -23,6 +24,9 @@ from ...core.task_validation import (
     format_validation_warning,
     should_exit_on_validation,
 )
+
+# --- ADD THESE IMPORTS AT TOP ---
+from ...core.budget import load_budget, merge_constraints, constraint_origin
 
 console = Console()
 
@@ -38,7 +42,8 @@ def _read_global_strict() -> bool:
         with config_path.open("rb") as f:
             data = tomllib.load(f)
         return bool(data.get("validation", {}).get("strict_output", False))
-    except Exception:
+    except Exception as e:
+        console.print(f"[yellow]Warning: invalid config.toml: {e}[/yellow]")
         return False
 
 
@@ -53,14 +58,14 @@ def _benchmark_build(build, runs, warmup, compute_unit):
             runs=runs,
             warmup=warmup,
         )
-        # Return a simple namespace matching the fields we need
-        class _Result:
-            latency_p50 = metrics["p50_ms"]
-            latency_p95 = metrics["p95_ms"]
-            latency_p99 = metrics["p99_ms"]
-            memory_peak_mb = max(metrics["memory_rss_mb"], 0.0)
-            outputs = {}  # TFLite runner doesn't expose outputs here
-        return _Result()
+        # FIX: use SimpleNamespace instead of fake class
+        return SimpleNamespace(
+            latency_p50=metrics["p50_ms"],
+            latency_p95=metrics["p95_ms"],
+            latency_p99=metrics["p99_ms"],
+            memory_peak_mb=max(metrics["memory_rss_mb"], 0.0),
+            outputs={},
+        )
 
     else:
         cu_map = {
@@ -138,12 +143,45 @@ def validate(
         mlbuild validate <build> --max-latency 10 --max-memory 500
         mlbuild validate <build> --max-latency 10 --ci
     """
+    # FIX: integrate budget constraints
+    try:
+        budget = load_budget()
+    except Exception as e:
+        if not ci:
+            console.print(f"[red]Invalid budget file:[/red] {e}")
+        sys.exit(1)
+
+    explicit = {
+        "max_latency_ms": max_latency,
+        "max_p95_ms":     max_p95,
+        "max_memory_mb":  max_memory,
+        "max_size_mb":    max_size,
+    }
+
+    merged = merge_constraints(explicit, budget)
+
+    max_latency = merged["max_latency_ms"]
+    max_p95     = merged["max_p95_ms"]
+    max_memory  = merged["max_memory_mb"]
+    max_size    = merged["max_size_mb"]
+
+    if not ci and any(v is not None for v in budget.values()):
+        console.print("[dim]Using budget constraints from .mlbuild/budget.toml[/dim]\n")
+
     if not ci:
         console.print(f"\n[bold]Constraint Validation[/bold]")
         console.print(f"Build: {build_id[:16]}...\n")
 
-    registry = LocalRegistry()
-    build = registry.resolve_build(build_id)
+    # FIX: safe registry handling
+    try:
+        registry = LocalRegistry()
+        build = registry.resolve_build(build_id)
+    except Exception as e:
+        if ci:
+            print(f"STATUS: FAIL\nERROR: registry: {e}")
+        else:
+            console.print(f"[red]Registry error:[/red] {e}")
+        sys.exit(1)
 
     if not build:
         if not ci:
@@ -173,13 +211,22 @@ def validate(
 
     # Size constraint (no benchmark needed)
     if max_size is not None:
+        # FIX: safe size handling
+        if build.size_mb is None:
+            if ci:
+                print("STATUS: FAIL\nERROR: missing size")
+            else:
+                console.print("[red]Build missing size information[/red]")
+            sys.exit(1)
+
         size_mb = float(build.size_mb)
         if size_mb > max_size:
             violations.append({
-                'constraint': 'size',
+                'constraint': 'max_size_mb',
                 'limit': max_size,
                 'actual': size_mb,
                 'unit': 'MB',
+                'origin': constraint_origin("max_size_mb", explicit, budget),
             })
 
     # Performance constraints
@@ -192,29 +239,24 @@ def validate(
         try:
             result = _benchmark_build(build, runs, warmup, compute_unit)
 
-            if max_latency is not None and result.latency_p50 > max_latency:
-                violations.append({
-                    'constraint': 'latency_p50',
-                    'limit': max_latency,
-                    'actual': result.latency_p50,
-                    'unit': 'ms',
-                })
+            # FIX: structured constraint checks
+            checks = [
+                ("max_latency_ms", result.latency_p50, max_latency, "ms"),
+                ("max_p95_ms", result.latency_p95, max_p95, "ms"),
+                ("max_memory_mb", result.memory_peak_mb, max_memory, "MB"),
+            ]
 
-            if max_p95 is not None and result.latency_p95 > max_p95:
-                violations.append({
-                    'constraint': 'latency_p95',
-                    'limit': max_p95,
-                    'actual': result.latency_p95,
-                    'unit': 'ms',
-                })
-
-            if max_memory is not None and result.memory_peak_mb > max_memory:
-                violations.append({
-                    'constraint': 'memory',
-                    'limit': max_memory,
-                    'actual': result.memory_peak_mb,
-                    'unit': 'MB',
-                })
+            for key, actual, limit, unit in checks:
+                if limit is None:
+                    continue
+                if actual > limit:
+                    violations.append({
+                        "constraint": key,
+                        "limit": limit,
+                        "actual": actual,
+                        "unit": unit,
+                        "origin": constraint_origin(key, explicit, budget),
+                    })
 
             # --- PATCH: output validation from the benchmark inference pass ---
             raw_outputs = getattr(result, 'outputs', {})
@@ -239,8 +281,10 @@ def validate(
                     sys.exit(1)
 
         except Exception as e:
-            if not ci:
-                console.print(f"[red]Benchmark failed: {e}[/red]")
+            if ci:
+                print(f"STATUS: FAIL\nERROR: benchmark: {e}")
+            else:
+                console.print(f"[red]Benchmark failed:[/red] {e}")
             sys.exit(1)
 
     # Accuracy check (only if --dataset provided)
@@ -289,7 +333,7 @@ def validate(
             top1 = f"{accuracy_result.top1_agreement:.4f}" if accuracy_result.top1_agreement is not None else "—"
             console.print(f"[dim]Accuracy: cosine={cos}  top1={top1}[/dim]")
         if ci:
-            print("✓ All constraints passed")
+            print("STATUS: PASS")
         else:
             console.print("[bold green]✓ All constraints passed[/bold green]\n")
         sys.exit(0)
@@ -297,7 +341,8 @@ def validate(
 
 def _report_violations(violations, ci_mode):
     if ci_mode:
-        print(f"FAILED: {len(violations)} constraint(s) violated")
+        print(f"STATUS: FAIL")
+        print(f"VIOLATIONS: {len(violations)}")
         for v in violations:
             print(f"  {v['constraint']}: {v['actual']:.2f}{v['unit']} > {v['limit']}{v['unit']}")
         return
@@ -313,6 +358,7 @@ def _report_violations(violations, ci_mode):
     table.add_column("Limit", justify="right")
     table.add_column("Actual", justify="right")
     table.add_column("Violation", justify="right")
+    table.add_column("Source", justify="right")
 
     for v in violations:
         limit_str = f"{v['limit']:.2f} {v['unit']}"
@@ -323,7 +369,13 @@ def _report_violations(violations, ci_mode):
             violation_str = f"{over:+.4f} ({abs(over_pct):.1f}% below threshold)"
         else:
             violation_str = f"+{over:.2f} ({over_pct:.1f}% over)"
-        table.add_row(v['constraint'], limit_str, actual_str, violation_str)
+        table.add_row(
+            v['constraint'],
+            limit_str,
+            actual_str,
+            violation_str,
+            v.get('origin', 'unknown')
+        )
 
     console.print(table)
     console.print()
