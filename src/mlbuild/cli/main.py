@@ -561,5 +561,8 @@ cli.add_command(import_cmd, name="import")
 from .commands.budget import budget as budget_group
 cli.add_command(budget_group)
 
+from .commands.baseline import baseline as baseline_group
+cli.add_command(baseline_group)
+
 if __name__ == "__main__":
     cli()

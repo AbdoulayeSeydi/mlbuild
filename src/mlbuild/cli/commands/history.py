@@ -190,7 +190,14 @@ def _render_history_entry(row: dict) -> str:
     "--filter",
     "filter_cmd",
     type=click.Choice(
-        ["build", "benchmark", "validate", "compare", "profile", "diff", "explore", "failed"]
+        [
+            "accuracy", "baseline", "benchmark", "budget", "build",
+            "ci", "ci-check", "compare", "compare-compute-units",
+            "compare-quantization", "diff", "doctor", "experiment",
+            "explore", "import", "init", "log", "optimize", "profile",
+            "pull", "push", "remote", "report", "run", "sync", "tag",
+            "validate", "failed",
+        ]
     ),
 )
 @click.option("--since")

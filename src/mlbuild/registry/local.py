@@ -720,6 +720,42 @@ class LocalRegistry:
                 return None
 
             return self.get_build(row['build_id'])
+        
+    def get_tag_row(self, tag: str) -> dict | None:
+        """Return the raw tag row or None if not found."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM tags WHERE tag = ?",
+                (tag,)
+            ).fetchone()
+
+    def delete_tag(self, tag: str) -> None:
+        """Delete a tag by name. No-op if tag doesn't exist."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM tags WHERE tag = ?", (tag,))
+
+    def get_baseline_history(self, limit: int = 20) -> list:
+        """
+        Return tags that look like baselines — mlbuild-baseline,
+        main-*, baseline-*, production-*.
+        """
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT tags.tag, tags.build_id, tags.created_at,
+                    builds.name, builds.format, builds.target_device,
+                    builds.cached_latency_p50_ms, builds.size_bytes
+                FROM tags
+                LEFT JOIN builds ON tags.build_id = builds.build_id
+                WHERE tags.tag = 'mlbuild-baseline'
+                OR tags.tag LIKE 'main-%'
+                OR tags.tag LIKE 'baseline-%'
+                OR tags.tag LIKE 'production-%'
+                ORDER BY tags.created_at DESC
+                LIMIT ?
+                """,
+                (limit,)
+            ).fetchall()
 
     def resolve_tag(self, tag_or_id: str):
         """
@@ -733,6 +769,7 @@ class LocalRegistry:
             return build, tag_or_id
         build = self.resolve_build(tag_or_id)
         return build, None
+
     
     # ------------------------------------------------------------
     # Command Log
