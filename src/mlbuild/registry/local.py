@@ -947,6 +947,93 @@ class LocalRegistry:
             return conn.execute(
                 "SELECT COUNT(*) FROM command_log"
             ).fetchone()[0]
+        
+    def get_stats(self) -> dict:
+        """Return build and benchmark counts."""
+        with self._connect() as conn:
+            builds = conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
+            benchmarks = conn.execute("SELECT COUNT(*) FROM benchmarks").fetchone()[0]
+        return {"builds": builds, "benchmarks": benchmarks}
+
+
+    def get_last_build(self) -> dict | None:
+        """Return the most recently created build as a plain dict."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT name, format, target_device,
+                    cached_latency_p50_ms, size_bytes, created_at
+                FROM builds ORDER BY created_at DESC LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "name":                  row["name"],
+            "format":                row["format"],
+            "target_device":         row["target_device"],
+            "cached_latency_p50_ms": row["cached_latency_p50_ms"],
+            "size_bytes":            row["size_bytes"],
+            "created_at":            row["created_at"],
+        }
+
+
+    def get_last_benchmark(self) -> dict | None:
+        """Return the most recent benchmark as a plain dict."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT build_id, measured_at, latency_p50_ms,
+                    latency_p95_ms, runtime
+                FROM benchmarks ORDER BY measured_at DESC LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "build_id":       row["build_id"],
+            "measured_at":    row["measured_at"],
+            "latency_p50_ms": row["latency_p50_ms"],
+            "latency_p95_ms": row["latency_p95_ms"],
+            "runtime":        row["runtime"],
+        }
+
+
+    def get_last_validate(self) -> dict | None:
+        """Return the most recent validate command from command_log."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT command_name, ran_at, exit_code
+                FROM command_log
+                WHERE command_name = 'validate'
+                ORDER BY ran_at DESC LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "command_name": row["command_name"],
+            "ran_at":       row["ran_at"],
+            "exit_code":    row["exit_code"],
+        }
+
+
+    def get_baseline(self) -> dict | None:
+        """Return current baseline build as a plain dict or None."""
+        build = self.get_build_by_tag("mlbuild-baseline")
+        if build is None:
+            return None
+        return {
+            "build": {
+                "build_id":              build.build_id,
+                "name":                  build.name,
+                "format":                build.format,
+                "target_device":         build.target_device,
+                "cached_latency_p50_ms": build.cached_latency_p50_ms,
+                "size_bytes":            int(build.size_mb * 1024 * 1024) if build.size_mb else None,
+            }
+        }
 
     # ------------------------------------------------------------
     # Row Mapping

@@ -195,8 +195,8 @@ def _render_history_entry(row: dict) -> str:
             "ci", "ci-check", "compare", "compare-compute-units",
             "compare-quantization", "diff", "doctor", "experiment",
             "explore", "import", "init", "log", "optimize", "profile",
-            "pull", "push", "remote", "report", "run", "sync", "tag",
-            "validate", "failed",
+            "pull", "push", "remote", "report", "run", "status", "sync",
+            "tag", "validate", "failed",
         ]
     ),
 )

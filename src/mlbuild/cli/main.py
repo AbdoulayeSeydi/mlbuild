@@ -10,12 +10,16 @@ import os
 import sys
 from pathlib import Path
 
-# Suppress coremltools version warnings on startup
+# Suppress noisy version warnings from coremltools and tensorflow on startup
 _devnull = open(os.devnull, 'w')
 _old_stderr = sys.stderr
 sys.stderr = _devnull
 try:
     import coremltools
+except Exception:
+    pass
+try:
+    import tensorflow
 except Exception:
     pass
 finally:
@@ -563,6 +567,9 @@ cli.add_command(budget_group)
 
 from .commands.baseline import baseline as baseline_group
 cli.add_command(baseline_group)
+
+from .commands.status import status as status_command
+cli.add_command(status_command)
 
 if __name__ == "__main__":
     cli()
