@@ -140,6 +140,7 @@ MLBuild is the missing on-device performance layer in your ML CI/CD stack.
 | S3-compatible remote storage | No | Built-in |
 | TFLite benchmarking | No | Built-in |
 | Import pre-built models | No | `mlbuild import` |
+| Build export | JSON and CSV export via `mlbuild export` with multi-table directory mode |
 
 MLBuild complements your existing stack — it doesn't replace it.
 
@@ -731,6 +732,31 @@ Protected builds (`mlbuild-baseline`, `main-*`, `production-*` tags) are always 
 
 ---
 
+#### Build Export
+
+Export a build and all its data for use in external tools, pipelines, and dashboards.
+```bash
+# JSON to stdout (default)
+mlbuild export <build-id>
+
+# JSON to file
+mlbuild export <build-id> --output out.json
+
+# Flat CSV to stdout (one row per benchmark)
+mlbuild export <build-id> --format csv
+
+# Flat CSV to file
+mlbuild export <build-id> --output out.csv
+
+# Full multi-table export to directory
+mlbuild export <build-id> --output out/
+mlbuild export <build-id> --output out/ --force  # overwrite existing
+```
+
+JSON output is versioned (`"version": "1"`) and stable — suitable for piping into CI pipelines, dashboards, and the future cloud API. Directory mode writes five files: `build.csv`, `artifacts.csv`, `benchmarks.csv`, `accuracy.csv`, `tags.csv` — every table joinable by `build_id`. All exports are deterministic: sorted, UTF-8, ISO 8601 timestamps.
+
+---
+
 #### Command History
 
 A permanent log of every MLBuild command ever run. Searchable, filterable, deletable.
@@ -1242,8 +1268,9 @@ mlbuild/
 ├── src/mlbuild/
 │   ├── cli/
 │   │   ├── formatters/
+│   │   │   ├── export.py                 # JSON + CSV serialization
 │   │   │   ├── inspect.py
-│   │   │   └── utils.py                  # shared: relative_time, parse_duration
+│   │   │   └── utils.py
 │   ├── models/
 │   │   └── build_view.py                 # BuildView, Artifact, BenchmarkRow, AccuracyRow
 │   │   ├── commands/
@@ -1260,6 +1287,7 @@ mlbuild/
 │   │   │   ├── doctor.py                 # mlbuild doctor
 │   │   │   ├── experiment.py             # mlbuild experiment
 │   │   │   ├── explore.py                # mlbuild explore
+│   │   │   ├── export.py                 # mlbuild export
 │   │   │   ├── history.py                # mlbuild history
 │   │   │   ├── inspect.py                # mlbuild inspect
 │   │   │   ├── import_cmd.py             # mlbuild import

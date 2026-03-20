@@ -583,5 +583,11 @@ def _register_prune():
 
 _register_prune()
 
+def _register_export():
+    from .commands.export import export
+    cli.add_command(export)
+
+_register_export()
+
 if __name__ == "__main__":
     cli()
