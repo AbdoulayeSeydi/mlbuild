@@ -67,3 +67,35 @@ class BuildView:
     # Tags + Notes
     tags: list[str] = field(default_factory=list)
     notes: str | None = None
+
+
+# ── Prune models ───────────────────────────────────────────────
+
+DELETE_BATCH_SIZE = 100
+
+
+@dataclass
+class PruneCandidate:
+    id: str
+    id_short: str
+    name: str | None
+    created_at: datetime
+    tags: list[str]
+    size_mb: float             # sum of ALL artifact files
+    artifact_paths: list[str]  # deduped at delete time in registry
+    protected: bool            # set by registry, never by CLI
+    primary_format: str        # set by registry, CLI never derives it
+
+
+@dataclass
+class PrunePlan:
+    candidates: list[PruneCandidate]   # will be deleted
+    skipped: list[PruneCandidate]      # protected — never touched
+
+
+@dataclass
+class PruneResult:
+    builds_deleted: int
+    files_deleted: int
+    bytes_reclaimed: int    # actual os.stat bytes only, never estimated
+    file_errors: int        # non-fatal, tracked separately

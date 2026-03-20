@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from rich.console import Console
 from rich.text import Text
+from mlbuild.cli.formatters.utils import relative_time as _relative
 
 if TYPE_CHECKING:
     from mlbuild.models.build_view import BuildView
@@ -43,32 +44,6 @@ def _section(title: str) -> Text:
 
 def _no_records() -> Text:
     return Text(" " * INDENT + "no records", style="dim")
-
-
-# ── Time ──────────────────────────────────────────────────────
-
-def _relative(dt: datetime) -> str:
-    now = datetime.now(timezone.utc)
-
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-
-    delta = now - dt
-    s = int(delta.total_seconds())
-
-    if s < 60:
-        return "just now"
-
-    if s < 3600:
-        m = s // 60
-        return f"{m} min{'s' if m != 1 else ''} ago"
-
-    if s < 86400:
-        h = s // 3600
-        return f"{h} hr{'s' if h != 1 else ''} ago"
-
-    d = s // 86400
-    return f"{d} day{'s' if d != 1 else ''} ago"
 
 
 # ── Table Utility (fixed columns, no drift) ────────────────────

@@ -577,5 +577,11 @@ def inspect():
 
 inspect()
 
+def _register_prune():
+    from .commands.prune import prune
+    cli.add_command(prune)
+
+_register_prune()
+
 if __name__ == "__main__":
     cli()

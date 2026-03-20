@@ -33,6 +33,7 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Baseline management | Reserved tag with clean CLI |
 | Workspace status | Quick health snapshot |
 | Build inspection | Single-build deep-dive via `mlbuild inspect` |
+| Registry pruning | Remove old builds via `mlbuild prune` with dry-run safety |
 
 ---
 
@@ -705,6 +706,31 @@ Output sections: Build → Task → Artifacts → Benchmarks → Accuracy → Ta
 
 ---
 
+#### Registry Pruning
+
+Remove old builds from the local registry. Supports soft-delete (hidden from queries) and hard delete with artifact file removal.
+```bash
+# Preview what would be pruned — never touches anything
+mlbuild prune --keep-last 20 --dry-run
+mlbuild prune --older-than 30d --dry-run
+
+# Soft-delete (hidden from queries, files kept)
+mlbuild prune --keep-last 20
+mlbuild prune --older-than 30d
+mlbuild prune --older-than 30d --tag experiment
+
+# Hard delete rows + artifact files (irreversible)
+mlbuild prune --older-than 30d --purge --force
+mlbuild prune --keep-last 10 --purge --force
+
+# Flags compose
+mlbuild prune --older-than 30d --keep-last 5 --dry-run
+```
+
+Protected builds (`mlbuild-baseline`, `main-*`, `production-*` tags) are always skipped — even if explicitly targeted. `--keep-last` is enforced globally before any filters apply, guaranteeing your N newest builds always survive.
+
+---
+
 #### Command History
 
 A permanent log of every MLBuild command ever run. Searchable, filterable, deletable.
@@ -1215,6 +1241,9 @@ score = 0.6 * (baseline_latency / variant_latency) \
 mlbuild/
 ├── src/mlbuild/
 │   ├── cli/
+│   │   ├── formatters/
+│   │   │   ├── inspect.py
+│   │   │   └── utils.py                  # shared: relative_time, parse_duration
 │   ├── models/
 │   │   └── build_view.py                 # BuildView, Artifact, BenchmarkRow, AccuracyRow
 │   │   ├── commands/
@@ -1237,6 +1266,7 @@ mlbuild/
 │   │   │   ├── log.py                    # mlbuild log
 │   │   │   ├── optimize.py               # mlbuild optimize
 │   │   │   ├── profile.py                # mlbuild profile
+│   │   │   ├── prune.py                  # mlbuild prune
 │   │   │   ├── pull.py                   # mlbuild pull
 │   │   │   ├── push.py                   # mlbuild push
 │   │   │   ├── remote.py                 # mlbuild remote

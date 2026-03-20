@@ -572,6 +572,160 @@ class LocalRegistry:
         return self._row_to_build(row) if row else None
     
     # ------------------------------------------------------------
+    # Prune
+    # ------------------------------------------------------------
+
+    def _is_protected(self, tags: list[str]) -> bool:
+        """Registry-layer only. CLI never calls this directly."""
+        for t in tags:
+            if t == "mlbuild-baseline":
+                return True
+            if t.startswith("main-") or t.startswith("production-"):
+                return True
+        return False
+
+    def get_prune_plan(
+        self,
+        keep_last: int | None = None,
+        older_than_days: float | None = None,
+        tag: str | None = None,
+    ) -> "PrunePlan":
+        from mlbuild.models.build_view import PruneCandidate, PrunePlan
+
+        with self._connect() as conn:
+            # Fetch ALL non-deleted builds, stable sort
+            rows = conn.execute(
+                """
+                SELECT b.build_id, b.name, b.created_at, b.format,
+                    b.size_bytes, b.artifact_path
+                FROM builds b
+                WHERE b.deleted_at IS NULL
+                ORDER BY b.created_at DESC, b.build_id DESC
+                """
+            ).fetchall()
+
+            # Fetch tags for all builds in one query
+            tag_rows = conn.execute(
+                "SELECT build_id, tag FROM tags"
+            ).fetchall()
+
+        # Build tag map
+        tag_map: dict[str, list[str]] = {}
+        for tr in tag_rows:
+            tag_map.setdefault(tr["build_id"], []).append(tr["tag"])
+
+        # Assemble candidates
+        all_builds: list[PruneCandidate] = []
+        for r in rows:
+            bid = r["build_id"]
+            build_tags = tag_map.get(bid, [])
+            all_builds.append(PruneCandidate(
+                id=bid,
+                id_short=bid[:8],
+                name=r["name"],
+                created_at=_parse_iso(r["created_at"]),
+                tags=build_tags,
+                size_mb=r["size_bytes"] / (1024 * 1024),
+                artifact_paths=[r["artifact_path"]],
+                protected=self._is_protected(build_tags),
+                primary_format=r["format"],
+            ))
+
+        # Step 2: separate protected
+        protected = [b for b in all_builds if b.protected]
+        eligible = [b for b in all_builds if not b.protected]
+
+        # Step 3: --keep-last floor applied PRE-FILTER (global)
+        keep_last_ids: set[str] = set()
+        if keep_last is not None:
+            for b in eligible[:keep_last]:
+                keep_last_ids.add(b.id)
+
+        # Step 4: apply --older-than
+        filtered = eligible
+        if older_than_days is not None:
+            from datetime import timezone
+            cutoff = datetime.now(timezone.utc).timestamp() - (older_than_days * 86400)
+            filtered = [
+                b for b in filtered
+                if b.created_at.replace(tzinfo=b.created_at.tzinfo or __import__('datetime').timezone.utc).timestamp() < cutoff
+            ]
+
+        # Step 5: apply --tag (AND, exact, case-sensitive, whitespace-trimmed)
+        if tag is not None:
+            tag = tag.strip()
+            filtered = [b for b in filtered if tag in b.tags]
+
+        # Step 6: remove keep-last protected builds from candidates
+        candidates = [b for b in filtered if b.id not in keep_last_ids]
+        skipped_keep = [b for b in filtered if b.id in keep_last_ids]
+
+        return PrunePlan(
+            candidates=candidates,
+            skipped=protected + skipped_keep,
+        )
+
+    def soft_delete_builds(self, build_ids: list[str]) -> int:
+        from mlbuild.models.build_view import DELETE_BATCH_SIZE
+
+        now = _utc_now_iso()
+        total = 0
+        for i in range(0, len(build_ids), DELETE_BATCH_SIZE):
+            batch = build_ids[i:i + DELETE_BATCH_SIZE]
+            placeholders = ",".join("?" * len(batch))
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    f"UPDATE builds SET deleted_at = ? WHERE build_id IN ({placeholders})",
+                    [now] + batch,
+                )
+                total += cursor.rowcount
+        return total
+
+    def hard_delete_builds(self, candidates: list["PruneCandidate"]) -> "PruneResult":
+        import os
+        from mlbuild.models.build_view import DELETE_BATCH_SIZE, PruneResult
+
+        # Deduplicate file paths across all candidates
+        unique_paths: set[str] = set()
+        for c in candidates:
+            unique_paths.update(c.artifact_paths)
+
+        # Measure + delete files
+        bytes_reclaimed = 0
+        files_deleted = 0
+        file_errors = 0
+        for path in unique_paths:
+            try:
+                size = os.stat(path).st_size
+                os.remove(path)
+                bytes_reclaimed += size
+                files_deleted += 1
+            except FileNotFoundError:
+                file_errors += 1
+            except OSError:
+                file_errors += 1
+
+        # Hard delete rows in batches (CASCADE handles benchmarks/tags/accuracy)
+        build_ids = [c.id for c in candidates]
+        builds_deleted = 0
+        for i in range(0, len(build_ids), DELETE_BATCH_SIZE):
+            batch = build_ids[i:i + DELETE_BATCH_SIZE]
+            placeholders = ",".join("?" * len(batch))
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    f"DELETE FROM builds WHERE build_id IN ({placeholders})",
+                    batch,
+                )
+                builds_deleted += cursor.rowcount
+
+        return PruneResult(
+            builds_deleted=builds_deleted,
+            files_deleted=files_deleted,
+            bytes_reclaimed=bytes_reclaimed,
+            file_errors=file_errors,
+        )
+    
+    # ------------------------------------------------------------
     # Accuracy Checks
     # ------------------------------------------------------------
 
