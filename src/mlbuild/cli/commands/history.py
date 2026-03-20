@@ -186,6 +186,7 @@ def _render_history_entry(row: dict) -> str:
 # ------------------------------------------------------------
 
 @click.group(invoke_without_command=True)
+@click.group(help="Show and manage command history.")
 @click.option(
     "--filter",
     "filter_cmd",

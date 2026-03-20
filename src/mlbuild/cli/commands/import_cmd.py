@@ -205,6 +205,7 @@ def _detect_task_for_import(model: Path, fmt: str, forced_task: str | None):
 # ================================================================
 
 @click.command("import")
+@click.command(help="Import a pre-built model into the registry.")
 @click.option(
     "--model",
     required=True,

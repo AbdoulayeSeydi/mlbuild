@@ -62,7 +62,7 @@ console = Console()
 @click.pass_context
 def cli(ctx, strict_output):
     """
-    MLBuild - Deterministic build system for CoreML models.
+    MLBuild — Performance CI/CD for on-device ML models.
 
     Track model performance and prevent regressions in CI.
     """

@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [
     {name = "Abdoulaye Seydi", email = "abdoulayeaseydi@gmail.com"}
 ]
-classifiers = [
+classifiers = [mlbuild --help
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.11",
@@ -34,6 +34,9 @@ dependencies = [
 
     # System metrics
     "psutil>=5.9.0",
+
+    # Cloud sync
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]

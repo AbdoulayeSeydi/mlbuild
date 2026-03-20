@@ -195,6 +195,7 @@ class PushService:
 # ---------------------------------------------------------
 
 @click.command()
+@click.command(help="Push builds to remote storage.")
 @click.argument("build_id", required=False)
 @click.option("--remote", help="Remote name")
 @click.option("--all", "push_all", is_flag=True)
