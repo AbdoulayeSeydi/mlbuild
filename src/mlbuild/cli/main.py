@@ -4,6 +4,15 @@ MLBuild CLI entry point with lazy command loading.
 Design: Commands are loaded on-demand to prevent import errors
 from breaking the entire CLI.
 """
+import warnings
+import logging
+
+# Suppress coremltools version compatibility warnings
+warnings.filterwarnings("ignore", message=".*coremltools.*")
+warnings.filterwarnings("ignore", message=".*TensorFlow version.*")
+warnings.filterwarnings("ignore", message=".*Torch version.*")
+logging.getLogger("coremltools").setLevel(logging.ERROR)
+
 
 import click
 import os
