@@ -32,6 +32,7 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Performance budget | Persistent constraints in .mlbuild/budget.toml |
 | Baseline management | Reserved tag with clean CLI |
 | Workspace status | Quick health snapshot |
+| Build inspection | Single-build deep-dive via `mlbuild inspect` |
 
 ---
 
@@ -686,6 +687,24 @@ Method labels are human-readable: `prune(0.50)`, `int8(static)` instead of raw i
 
 ---
 
+#### Build Inspection
+
+Full deep-dive on a single build. Shows metadata, artifacts, benchmarks, accuracy records, tags, and notes in one structured view.
+```bash
+# Full view
+mlbuild inspect <build-id>
+
+# Build + primary artifact + latest benchmark per compute unit
+mlbuild inspect <build-id> --short
+
+# JSON output (deterministic, sorted keys)
+mlbuild inspect <build-id> --json
+```
+
+Output sections: Build → Task → Artifacts → Benchmarks → Accuracy → Tags → Notes. All sections always rendered — empty sections show `no records` rather than being omitted.
+
+---
+
 #### Command History
 
 A permanent log of every MLBuild command ever run. Searchable, filterable, deletable.
@@ -724,8 +743,6 @@ mlbuild history clear
 ```
 
 History is an audit log of CLI actions — separate from build and benchmark data. Deleting a history entry never touches builds or benchmarks.
-
----
 
 ---
 
@@ -1198,6 +1215,8 @@ score = 0.6 * (baseline_latency / variant_latency) \
 mlbuild/
 ├── src/mlbuild/
 │   ├── cli/
+│   ├── models/
+│   │   └── build_view.py                 # BuildView, Artifact, BenchmarkRow, AccuracyRow
 │   │   ├── commands/
 │   │   │   ├── accuracy.py               # mlbuild accuracy
 │   │   │   ├── baseline.py               # mlbuild baseline
@@ -1213,6 +1232,7 @@ mlbuild/
 │   │   │   ├── experiment.py             # mlbuild experiment
 │   │   │   ├── explore.py                # mlbuild explore
 │   │   │   ├── history.py                # mlbuild history
+│   │   │   ├── inspect.py                # mlbuild inspect
 │   │   │   ├── import_cmd.py             # mlbuild import
 │   │   │   ├── log.py                    # mlbuild log
 │   │   │   ├── optimize.py               # mlbuild optimize

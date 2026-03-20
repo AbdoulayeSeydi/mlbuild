@@ -571,5 +571,11 @@ cli.add_command(baseline_group)
 from .commands.status import status as status_command
 cli.add_command(status_command)
 
+def inspect():
+    from .commands.inspect import inspect as inspect_cmd
+    cli.add_command(inspect_cmd)
+
+inspect()
+
 if __name__ == "__main__":
     cli()

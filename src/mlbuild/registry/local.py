@@ -770,6 +770,137 @@ class LocalRegistry:
         build = self.resolve_build(tag_or_id)
         return build, None
 
+    def get_build_view(self, identifier: str) -> "BuildView | None":
+        """
+        Assemble a BuildView for inspect/export/diff.
+        Accepts full ID, prefix, tag, or name.
+        """
+        from mlbuild.models.build_view import (
+            Artifact, BenchmarkRow, AccuracyRow, BuildView
+        )
+
+        build = self.resolve_build(identifier)
+        if not build:
+            return None
+
+        bid = build.build_id
+
+        # --- Artifact (one per build for now, priority=0) ---
+        quant_type = "fp32"
+        if isinstance(build.quantization, dict):
+            quant_type = build.quantization.get("type", "fp32")
+
+        artifacts = [
+            Artifact(
+                format=build.format,
+                target=build.target_device,
+                quantize=quant_type,
+                size_mb=float(build.size_mb),
+                sha256=build.artifact_hash,
+                priority=0,
+            )
+        ]
+
+        # --- Benchmarks ---
+        with self._connect() as conn:
+            bench_rows = conn.execute(
+                """
+                SELECT id, compute_unit, device_chip, runtime,
+                    latency_p50_ms, latency_p95_ms, num_runs, measured_at
+                FROM benchmarks
+                WHERE build_id = ?
+                ORDER BY measured_at DESC
+                """,
+                (bid,),
+            ).fetchall()
+
+        benchmarks = [
+            BenchmarkRow(
+                id=str(r["id"]),
+                compute_unit=r["compute_unit"] or "UNKNOWN",
+                device=r["device_chip"],
+                p50_ms=r["latency_p50_ms"],
+                p95_ms=r["latency_p95_ms"],
+                runs=r["num_runs"],
+                warmup=None,
+                batch_size=None,
+                input_shape=None,
+                backend=r["runtime"],
+                ran_at=_parse_iso(r["measured_at"]),
+            )
+            for r in bench_rows
+        ]
+
+        # --- Accuracy (build appears as baseline OR candidate) ---
+        with self._connect() as conn:
+            acc_rows = conn.execute(
+                """
+                SELECT * FROM accuracy_checks
+                WHERE baseline_build_id = ? OR candidate_build_id = ?
+                ORDER BY created_at DESC
+                LIMIT 20
+                """,
+                (bid, bid),
+            ).fetchall()
+
+        task = build.task_type or "unknown"
+        primary_metric = (
+            "top1" if task == "vision"
+            else "cosine" if task in ("nlp", "audio")
+            else "cosine"
+        )
+
+        accuracy_records = []
+        for r in acc_rows:
+            # show the *other* build in the pair
+            other_full = (
+                r["candidate_build_id"]
+                if r["baseline_build_id"] == bid
+                else r["baseline_build_id"]
+            )
+            accuracy_records.append(
+                AccuracyRow(
+                    compared_to=other_full[:8],
+                    compared_to_full=other_full,
+                    primary_metric=primary_metric,
+                    threshold=None,
+                    cosine=r["cosine_similarity"],
+                    mae=r["mean_abs_error"],
+                    top1=r["top1_agreement"],
+                    dataset=None,
+                    passed=bool(r["passed"]),
+                    ran_at=_parse_iso(r["created_at"]),
+                )
+            )
+
+        # --- Tags ---
+        with self._connect() as conn:
+            tag_rows = conn.execute(
+                "SELECT tag FROM tags WHERE build_id = ? ORDER BY created_at ASC",
+                (bid,),
+            ).fetchall()
+        tags = [r["tag"] for r in tag_rows]
+
+        # --- Detection tier ---
+        if build.task_type:
+            detection_tier = "tier-1 (explicit)"
+        else:
+            detection_tier = "tier-3 (default)"
+
+        return BuildView(
+            id=bid,
+            id_short=bid[:8],
+            name=build.name,
+            created_at=build.created_at,
+            source="imported" if build.backend_versions.get("imported") == "true" else "built",
+            task_type=task,
+            detection_tier=detection_tier,
+            artifacts=artifacts,
+            benchmarks=benchmarks,
+            accuracy_records=accuracy_records,
+            tags=tags,
+            notes=build.notes,
+        )
     
     # ------------------------------------------------------------
     # Command Log
