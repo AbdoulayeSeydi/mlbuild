@@ -598,5 +598,11 @@ def _register_export():
 
 _register_export()
 
+def _register_upgrade():
+    from .commands.upgrade import upgrade
+    cli.add_command(upgrade)
+
+_register_upgrade()
+
 if __name__ == "__main__":
     cli()

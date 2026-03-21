@@ -141,6 +141,7 @@ MLBuild is the missing on-device performance layer in your ML CI/CD stack.
 | TFLite benchmarking | No | Built-in |
 | Import pre-built models | No | `mlbuild import` |
 | Build export | JSON and CSV export via `mlbuild export` with multi-table directory mode |
+| Self-upgrade | `mlbuild upgrade` — updates from PyPI with version comparison |
 
 MLBuild complements your existing stack — it doesn't replace it.
 
@@ -1303,6 +1304,7 @@ mlbuild/
 │   │   │   ├── status.py                 # mlbuild status
 │   │   │   ├── sync.py                   # mlbuild sync
 │   │   │   ├── tag.py                    # mlbuild tag
+│   │   │   ├── upgrade.py                # mlbuild upgrade
 │   │   │   └── validate.py               # mlbuild validate
 │   │   └── main.py                       # CLI entry point
 │   ├── backends/
