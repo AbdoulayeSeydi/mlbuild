@@ -9,7 +9,7 @@ from rich import box
 
 from mlbuild.cli.formatters.utils import parse_duration, relative_time
 
-console = Console()
+console = Console(width=None)
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -91,11 +91,11 @@ def prune(keep_last, older_than, purge, dry_run, force, tag):
         console.print()
 
         table = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
-        table.add_column("ID",     style="bold", min_width=10)
-        table.add_column("Name",   min_width=18)
-        table.add_column("Format", min_width=10)
-        table.add_column("Size",   min_width=10, justify="right")
-        table.add_column("Age",    min_width=12)
+        table.add_column("ID",     style="bold", min_width=10, no_wrap=True)
+        table.add_column("Name",   min_width=18, no_wrap=True)
+        table.add_column("Format", min_width=10, no_wrap=True)
+        table.add_column("Size",   min_width=10, justify="right", no_wrap=True)
+        table.add_column("Age",    min_width=12, no_wrap=True)
 
         for c in plan.candidates:
             table.add_row(

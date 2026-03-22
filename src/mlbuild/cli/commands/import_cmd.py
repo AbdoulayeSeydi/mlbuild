@@ -43,7 +43,7 @@ from mlbuild.core.errors import InternalError
 from mlbuild.core.task_detection import detect_task, detection_warning, ModelInfo, TaskType
 from mlbuild.core.task_validation import StrictOutputConfig
 
-console = Console()
+console = Console(width=None)
 
 # ================================================================
 # Helpers
@@ -204,7 +204,6 @@ def _detect_task_for_import(model: Path, fmt: str, forced_task: str | None):
 # CLI Command
 # ================================================================
 
-@click.command("import")
 @click.command(help="Import a pre-built model into the registry.")
 @click.option(
     "--model",

@@ -24,7 +24,7 @@ from ...storage import (
     ConfigError,
 )
 
-console = Console()
+console = Console(width=None)
 
 # ---------------------------------------------------------------------
 # Exit Codes (structured)
@@ -213,10 +213,10 @@ def list_remotes(ctx: click.Context, as_json: bool):
             return
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Name", style="green")
-        table.add_column("Backend")
-        table.add_column("Location")
-        table.add_column("Default", justify="center")
+        table.add_column("Name", style="green", no_wrap=True)
+        table.add_column("Backend", no_wrap=True)
+        table.add_column("Location", no_wrap=True)
+        table.add_column("Default", justify="center", no_wrap=True)
 
         for name in sorted_names:
             config = remotes[name]

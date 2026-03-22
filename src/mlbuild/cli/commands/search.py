@@ -11,7 +11,7 @@ from rich import box
 
 from mlbuild.registry.local import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 
 # ---------- Validation ----------
@@ -159,17 +159,17 @@ def search(query, target, task, fmt, tag, date_from, date_to, limit, as_json):
     console.print(f"[bold]{len(results)} result{'s' if len(results) != 1 else ''}[/bold] for {label}")
 
     table = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
-    table.add_column("ID",      style="cyan",  min_width=10)
-    table.add_column("Name",    min_width=20)
-    table.add_column("Format",  min_width=8)
-    table.add_column("Target",  min_width=14)
-    table.add_column("Task",    min_width=8)
-    table.add_column("Method",  min_width=10)
-    table.add_column("p50",     justify="right")
-    table.add_column("p95",     justify="right")
-    table.add_column("Mem",     justify="right")
-    table.add_column("Size",    justify="right")
-    table.add_column("Tags")
+    table.add_column("ID",      style="cyan",  min_width=10, no_wrap=True)
+    table.add_column("Name",    min_width=20, no_wrap=True)
+    table.add_column("Format",  min_width=8, no_wrap=True)
+    table.add_column("Target",  min_width=14, no_wrap=True)
+    table.add_column("Task",    min_width=8, no_wrap=True)
+    table.add_column("Method",  min_width=10, no_wrap=True)
+    table.add_column("p50",     justify="right", no_wrap=True)
+    table.add_column("p95",     justify="right", no_wrap=True)
+    table.add_column("Mem",     justify="right", no_wrap=True)
+    table.add_column("Size",    justify="right", no_wrap=True)
+    table.add_column("Tags", no_wrap=True)
 
     for r in results:
         table.add_row(

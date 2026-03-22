@@ -49,7 +49,7 @@ from ...core.task_validation import (
     should_exit_on_validation,
 )
 
-console = Console()
+console = Console(width=None)
 
 
 # --- PATCH: shared helper (mirrors build.py / benchmark.py) ---

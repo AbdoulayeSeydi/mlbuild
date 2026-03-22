@@ -21,7 +21,7 @@ from ...experiments.manager import (
 )
 from ...experiments.active_run import ActiveRunStore
 
-console = Console()
+console = Console(width=None)
 
 
 # ============================================================
@@ -278,11 +278,11 @@ def list_runs(manager: ExperimentManager, experiment: str, limit: int):
             return
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Run Name")
-        table.add_column("ID", style="dim")
-        table.add_column("Status")
-        table.add_column("Build")
-        table.add_column("Started")
+        table.add_column("Run Name", no_wrap=True)
+        table.add_column("ID", style="dim", no_wrap=True)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Build", no_wrap=True)
+        table.add_column("Started", no_wrap=True)
 
         for run_obj in runs:
             table.add_row(

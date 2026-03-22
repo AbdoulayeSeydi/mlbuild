@@ -19,7 +19,7 @@ from ...experiments.manager import ExperimentManager
 
 from pathlib import Path
 
-console = Console()
+console = Console(width=None)
 
 
 # ------------------------------------------------------------
@@ -147,10 +147,10 @@ def list_experiments(
             sys.exit(EXIT_SUCCESS)
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Name", style="green", overflow="fold")
-        table.add_column("ID", style="dim")
-        table.add_column("Created", style="dim")
-        table.add_column("Deleted", style="red")
+        table.add_column("Name", style="green", overflow="fold", no_wrap=True)
+        table.add_column("ID", style="dim", no_wrap=True)
+        table.add_column("Created", style="dim", no_wrap=True)
+        table.add_column("Deleted", style="red", no_wrap=True)
 
         for exp in experiments:
             table.add_row(

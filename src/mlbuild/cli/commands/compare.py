@@ -26,7 +26,7 @@ from ...core.accuracy.checker import run_accuracy_check
 
 import numpy as np
 
-console = Console()
+console = Console(width=None)
 
 
 def _pct_change(baseline_val: float, candidate_val: float) -> float:
@@ -189,11 +189,11 @@ def _run_nlp_comparison(baseline, candidate, latency_threshold, as_json, ci_mode
         return 1 if regression_detected else 0
 
     table = Table(title="NLP Comparison (per seq-len)", show_header=True, header_style="bold magenta")
-    table.add_column("Seq Len",       style="cyan",   justify="right")
-    table.add_column("Baseline p50",               justify="right")
-    table.add_column("Candidate p50",              justify="right")
-    table.add_column("\u0394",                          justify="right")
-    table.add_column("Regression?",                justify="center")
+    table.add_column("Seq Len",       style="cyan",   justify="right", no_wrap=True)
+    table.add_column("Baseline p50",               justify="right", no_wrap=True)
+    table.add_column("Candidate p50",              justify="right", no_wrap=True)
+    table.add_column("\u0394",                          justify="right", no_wrap=True)
+    table.add_column("Regression?",                justify="center", no_wrap=True)
 
     for seq_len, b_p50, c_p50, delta_ms, pct, is_reg in rows:
         if b_p50 is None or c_p50 is None:
@@ -330,10 +330,10 @@ def _run_comparison(
                     show_header=True,
                     header_style="bold magenta",
                 )
-                table.add_column("Metric", style="cyan")
-                table.add_column("Baseline", justify="right")
-                table.add_column("Candidate", justify="right")
-                table.add_column("Change", justify="right")
+                table.add_column("Metric", style="cyan", no_wrap=True)
+                table.add_column("Baseline", justify="right", no_wrap=True)
+                table.add_column("Candidate", justify="right", no_wrap=True)
+                table.add_column("Change", justify="right", no_wrap=True)
                 table.add_row(
                     "Size (MB)",
                     f"{baseline_size_mb:.2f}",
@@ -481,9 +481,9 @@ def _run_comparison(
                 header_style="bold magenta",
             )
             table.add_column("Metric", style="cyan", no_wrap=True)
-            table.add_column("Baseline", justify="right")
-            table.add_column("Candidate", justify="right")
-            table.add_column("Change", justify="right")
+            table.add_column("Baseline", justify="right", no_wrap=True)
+            table.add_column("Candidate", justify="right", no_wrap=True)
+            table.add_column("Change", justify="right", no_wrap=True)
 
             table.add_row(
                 "Model size (MB)",
@@ -630,10 +630,10 @@ def _run_comparison(
             show_header=True,
             header_style="bold magenta",
         )
-        acc_table.add_column("Metric",    style="cyan")
-        acc_table.add_column("Value",     justify="right")
-        acc_table.add_column("Threshold", justify="right", style="dim")
-        acc_table.add_column("Gate",      justify="center")
+        acc_table.add_column("Metric",    style="cyan", no_wrap=True)
+        acc_table.add_column("Value",     justify="right", no_wrap=True)
+        acc_table.add_column("Threshold", justify="right", style="dim", no_wrap=True)
+        acc_table.add_column("Gate",      justify="center", no_wrap=True)
 
         def _gate(passed: bool) -> str:
             return "[green]PASS[/green]" if passed else "[red]FAIL[/red]"

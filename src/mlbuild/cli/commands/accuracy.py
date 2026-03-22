@@ -32,7 +32,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
-console = Console()
+console = Console(width=None)
 
 
 # ----------------------------------------------------------------

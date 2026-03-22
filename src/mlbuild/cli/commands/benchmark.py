@@ -28,7 +28,7 @@ from ...core.task_validation import (
     should_exit_on_validation,
 )
 
-console = Console()
+console = Console(width=None)
 
 
 # --- PATCH: shared helper (mirrors build.py) ---
@@ -275,8 +275,8 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
         else:
             # Rich table
             table = Table(title="Benchmark Results")
-            table.add_column("Metric", style="cyan")
-            table.add_column("Value", justify="right", style="green")
+            table.add_column("Metric", style="cyan", no_wrap=True)
+            table.add_column("Value", justify="right", style="green", no_wrap=True)
             
             table.add_row("Device", result.chip)
             table.add_row("Runtime", runtime)
@@ -483,10 +483,10 @@ def _print_nlp_results(rows, json_buckets, build, as_json, strict_cfg, validator
         return
 
     table = Table(title="NLP Benchmark Results")
-    table.add_column("Seq Len", style="cyan", justify="right")
-    table.add_column("p50",     style="green", justify="right")
-    table.add_column("p95",     style="yellow", justify="right")
-    table.add_column("p99",     style="red", justify="right")
+    table.add_column("Seq Len", style="cyan", justify="right", no_wrap=True)
+    table.add_column("p50",     style="green", justify="right", no_wrap=True)
+    table.add_column("p95",     style="yellow", justify="right", no_wrap=True)
+    table.add_column("p99",     style="red", justify="right", no_wrap=True)
 
     for seq_len, p50, p95, p99 in rows:
         table.add_row(

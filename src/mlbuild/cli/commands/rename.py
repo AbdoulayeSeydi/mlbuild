@@ -5,7 +5,7 @@ from rich.console import Console
 
 from mlbuild.registry.local import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 
 def _validate_name(name: str) -> str:

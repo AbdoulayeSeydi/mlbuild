@@ -16,7 +16,7 @@ from rich import box
 from ...registry.local import LocalRegistry
 from ...optimize.optimizer import optimize as run_optimize, prune as run_prune, OptimizeError
 
-console = Console()
+console = Console(width=None)
 
 
 def optimize_cmd(
@@ -164,11 +164,11 @@ def _print_table(source, variants: List) -> None:
     )
 
     table.add_column("Method", style="cyan", no_wrap=True)
-    table.add_column("Variant ID", style="dim")
-    table.add_column("Build ID")
-    table.add_column("Size", justify="right")
-    table.add_column("Size Δ", justify="right")
-    table.add_column("p50 Latency", justify="right")
+    table.add_column("Variant ID", style="dim", no_wrap=True)
+    table.add_column("Build ID", no_wrap=True)
+    table.add_column("Size", justify="right", no_wrap=True)
+    table.add_column("Size Δ", justify="right", no_wrap=True)
+    table.add_column("p50 Latency", justify="right", no_wrap=True)
 
     for v in variants:
 

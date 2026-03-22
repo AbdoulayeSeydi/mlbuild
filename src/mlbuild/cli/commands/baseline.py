@@ -17,7 +17,7 @@ from rich.table import Table
 
 from ...registry import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 BASELINE_TAG = "mlbuild-baseline"
 
@@ -200,14 +200,14 @@ def baseline_history(limit: int):
     console.print(f"\n[bold]Baseline History[/bold]\n")
 
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Tag",      style="green")
-    table.add_column("Build ID", style="cyan")
-    table.add_column("Name")
-    table.add_column("Format",   style="blue")
-    table.add_column("Target",   style="yellow")
-    table.add_column("p50",      justify="right")
-    table.add_column("Size",     justify="right")
-    table.add_column("Tagged",   style="dim")
+    table.add_column("Tag",      style="green", no_wrap=True)
+    table.add_column("Build ID", style="cyan", no_wrap=True)
+    table.add_column("Name", no_wrap=True)
+    table.add_column("Format",   style="blue", no_wrap=True)
+    table.add_column("Target",   style="yellow", no_wrap=True)
+    table.add_column("p50",      justify="right", no_wrap=True)
+    table.add_column("Size",     justify="right", no_wrap=True)
+    table.add_column("Tagged",   style="dim", no_wrap=True)
 
     for row in rows:
         lat = (

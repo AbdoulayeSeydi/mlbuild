@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from ...registry import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 # ---------------------------
 # Constants
@@ -132,10 +132,10 @@ def list_tags(limit: int):
     console.print(f"\n[bold]Tags[/bold] ({len(rows)} shown)\n")
 
     table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("Tag", style="green")
-    table.add_column("Build ID", style="cyan")
-    table.add_column("Build Name")
-    table.add_column("Created", style="dim")
+    table.add_column("Tag", style="green", no_wrap=True)
+    table.add_column("Build ID", style="cyan", no_wrap=True)
+    table.add_column("Build Name", no_wrap=True)
+    table.add_column("Created", style="dim", no_wrap=True)
 
     for row in rows:
         tag_name = row['tag']

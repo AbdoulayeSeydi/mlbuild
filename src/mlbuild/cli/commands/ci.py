@@ -18,7 +18,7 @@ from typing import Optional
 import click
 from rich.console import Console
 
-console = Console()
+console = Console(width=None)
 logger = logging.getLogger(__name__)
 
 # Exit code contract:

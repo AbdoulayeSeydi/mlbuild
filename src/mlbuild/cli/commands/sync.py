@@ -24,7 +24,7 @@ from ...storage import RemoteRepository
 from ...registry import LocalRegistry
 
 
-console = Console()
+console = Console(width=None)
 
 
 # ==========================================================

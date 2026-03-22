@@ -18,7 +18,7 @@ from ...core.budget import (
     DISPLAY_MAP,
 )
 
-console = Console()
+console = Console(width=None)
 
 
 # ================================================================

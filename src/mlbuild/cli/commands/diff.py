@@ -18,7 +18,7 @@ from mlbuild.registry import LocalRegistry
 from mlbuild.core.errors import MLBuildError
 from mlbuild.core.diff_utils import compare_artifacts, compare_configs
 
-console = Console()
+console = Console(width=None)
 logger = logging.getLogger("mlbuild.diff")
 
 
@@ -215,8 +215,8 @@ def diff(build_a: str, build_b: str, as_json: bool, ignore_size: bool, ignore_qu
         else:
             console.print(f"[bold]Diff:[/bold] {build_obj_a.build_id[:12]} → {build_obj_b.build_id[:12]}")
             table = Table(show_header=True, header_style="bold cyan")
-            table.add_column("Field")
-            table.add_column("Status")
+            table.add_column("Field", no_wrap=True)
+            table.add_column("Status", no_wrap=True)
 
             for field in sorted(result["metadata"].keys()):
                 table.add_row(field, result["metadata"][field]["status"])

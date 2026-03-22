@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 import click
 from rich.console import Console
 
-console = Console()
+console = Console(width=None)
 
 
 # ================================================================

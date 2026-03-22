@@ -34,7 +34,7 @@ from ...core.errors import MLBuildError
 if TYPE_CHECKING:
     from ...core.types import Build
 
-console = Console()
+console = Console(width=None)
 
 
 # -------------------------
@@ -459,22 +459,22 @@ def log(
             title=f"Builds (showing {len(builds)}, offset {offset})"
         )
 
-        table.add_column("Build ID", style="cyan")
-        table.add_column("Name", style="green")
-        table.add_column("Format", style="blue")
-        table.add_column("Method", style="cyan")
-        table.add_column("Target", style="yellow")
-        table.add_column("Task", style="magenta")
-        table.add_column("Size", justify="right")
-        table.add_column("p50 Latency", justify="right")
+        table.add_column("Build ID", style="cyan", no_wrap=True)
+        table.add_column("Name", style="green", no_wrap=True)
+        table.add_column("Format", style="blue", no_wrap=True)
+        table.add_column("Method", style="cyan", no_wrap=True)
+        table.add_column("Target", style="yellow", no_wrap=True)
+        table.add_column("Task", style="magenta", no_wrap=True)
+        table.add_column("Size", justify="right", no_wrap=True)
+        table.add_column("p50 Latency", justify="right", no_wrap=True)
         if show_machine:
-            table.add_column("Machine", style="dim")
-        table.add_column("Created", style="dim")
+            table.add_column("Machine", style="dim", no_wrap=True)
+        table.add_column("Created", style="dim", no_wrap=True)
 
         if show_hashes:
-            table.add_column("Artifact Hash", style="magenta")
-            table.add_column("Source Hash", style="magenta")
-            table.add_column("Config Hash", style="magenta")
+            table.add_column("Artifact Hash", style="magenta", no_wrap=True)
+            table.add_column("Source Hash", style="magenta", no_wrap=True)
+            table.add_column("Config Hash", style="magenta", no_wrap=True)
 
         for b, machine_name in zip(builds, machine_names):
             data = b.to_public_dict(include_hashes=show_hashes)

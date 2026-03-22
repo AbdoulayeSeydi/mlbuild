@@ -12,7 +12,7 @@ from rich import box
 
 from ...registry.local import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 
 # ------------------------------------------------------------
@@ -185,7 +185,6 @@ def _render_history_entry(row: dict) -> str:
 # history command
 # ------------------------------------------------------------
 
-@click.group(invoke_without_command=True)
 @click.group(help="Show and manage command history.")
 @click.option(
     "--filter",

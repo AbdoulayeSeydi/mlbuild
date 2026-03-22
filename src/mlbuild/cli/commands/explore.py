@@ -20,7 +20,7 @@ from ...explore.explorer import SUPPORTED_BACKENDS
 from ...registry.local import LocalRegistry
 from ...explore.explorer import explore as core_explore
 
-console = Console()
+console = Console(width=None)
 logger = logging.getLogger(__name__)
 
 
@@ -181,12 +181,12 @@ def _print_table(result) -> None:
         console.print(f"[bold]{backend_result.backend.upper()}[/bold]")
 
         table = Table(box=box.SIMPLE_HEAD)
-        table.add_column("Verdict", style="bold")
-        table.add_column("Method", style="cyan")
-        table.add_column("Size", justify="right")
-        table.add_column("p50 Latency", justify="right")
-        table.add_column("vs Baseline", justify="right")
-        table.add_column("Accuracy", justify="center")
+        table.add_column("Verdict", style="bold", no_wrap=True)
+        table.add_column("Method", style="cyan", no_wrap=True)
+        table.add_column("Size", justify="right", no_wrap=True)
+        table.add_column("p50 Latency", justify="right", no_wrap=True)
+        table.add_column("vs Baseline", justify="right", no_wrap=True)
+        table.add_column("Accuracy", justify="center", no_wrap=True)
 
         for v in backend_result.variants:
 

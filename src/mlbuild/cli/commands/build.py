@@ -51,7 +51,7 @@ from ...core.errors import MLBuildError
 from ...core.task_detection import detect_task, detection_warning, ModelInfo, TaskType
 from ...core.task_validation import StrictOutputConfig
 
-console = Console()
+console = Console(width=None)
 
 
 # ---------------------------------------------------------------------

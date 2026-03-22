@@ -13,7 +13,7 @@ from ...registry import LocalRegistry
 from ...core.types import Build
 from ...storage import RemoteRepository  # ← ADD THIS
 
-console = Console()
+console = Console(width=None)
 
 
 class PullResult:

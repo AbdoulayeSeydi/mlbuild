@@ -7,7 +7,7 @@ from typing import Tuple
 import click
 from rich.console import Console
 
-console = Console()
+console = Console(width=None)
 
 
 # ── Internal helpers ──────────────────────────────────────────

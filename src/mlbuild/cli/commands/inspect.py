@@ -9,7 +9,7 @@ from typing import Any
 import click
 from rich.console import Console
 
-console = Console()
+console = Console(width=None)
 
 
 # ── Registry Access (DI-ready) ─────────────────────────────────

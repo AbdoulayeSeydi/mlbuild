@@ -10,7 +10,7 @@ from rich.console import Console
 
 from packaging.version import Version, InvalidVersion
 
-console = Console()
+console = Console(width=None)
 
 PYPI_URL = "https://pypi.org/pypi/mlbuild/json"
 

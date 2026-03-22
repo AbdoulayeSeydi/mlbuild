@@ -21,7 +21,7 @@ from rich.console import Console
 from ...registry import LocalRegistry
 from ...core.errors import MLBuildError
 
-console = Console()
+console = Console(width=None)
 
 
 # ============================================================

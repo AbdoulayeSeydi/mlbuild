@@ -31,7 +31,7 @@ from ...benchmark.runner import (
 
 import numpy as np
 
-console = Console()
+console = Console(width=None)
 
 
 # ============================================================
@@ -681,18 +681,18 @@ def compare_quantization(
     console.print(f"\n[bold]Results[/bold]\n")
 
     table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("Build")
-    table.add_column("Fmt")
-    table.add_column("Quant")
-    table.add_column("Size MB", justify="right")
-    table.add_column("p50 ms", justify="right")
-    table.add_column("Mem MB", justify="right")
-    table.add_column("Δ Lat", justify="right")
-    table.add_column("Δ Sz", justify="right")
+    table.add_column("Build", no_wrap=True)
+    table.add_column("Fmt", no_wrap=True)
+    table.add_column("Quant", no_wrap=True)
+    table.add_column("Size MB", justify="right", no_wrap=True)
+    table.add_column("p50 ms", justify="right", no_wrap=True)
+    table.add_column("Mem MB", justify="right", no_wrap=True)
+    table.add_column("Δ Lat", justify="right", no_wrap=True)
+    table.add_column("Δ Sz", justify="right", no_wrap=True)
     if accuracy_results:
-        table.add_column("Acc%", justify="right")
-        table.add_column("CosSim", justify="right")
-    table.add_column("Score", justify="right")
+        table.add_column("Acc%", justify="right", no_wrap=True)
+        table.add_column("CosSim", justify="right", no_wrap=True)
+    table.add_column("Score", justify="right", no_wrap=True)
 
     for r in results:
         b = r["build"]

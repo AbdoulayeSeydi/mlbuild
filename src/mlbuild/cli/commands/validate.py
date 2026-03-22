@@ -28,7 +28,7 @@ from ...core.task_validation import (
 # --- ADD THESE IMPORTS AT TOP ---
 from ...core.budget import load_budget, merge_constraints, constraint_origin
 
-console = Console()
+console = Console(width=None)
 
 
 # --- PATCH: shared helper ---
@@ -354,11 +354,11 @@ def _report_violations(violations, ci_mode):
     console.print()
 
     table = Table(show_header=True, header_style="bold red")
-    table.add_column("Constraint")
-    table.add_column("Limit", justify="right")
-    table.add_column("Actual", justify="right")
-    table.add_column("Violation", justify="right")
-    table.add_column("Source", justify="right")
+    table.add_column("Constraint", no_wrap=True)
+    table.add_column("Limit", justify="right", no_wrap=True)
+    table.add_column("Actual", justify="right", no_wrap=True)
+    table.add_column("Violation", justify="right", no_wrap=True)
+    table.add_column("Source", justify="right", no_wrap=True)
 
     for v in violations:
         limit_str = f"{v['limit']:.2f} {v['unit']}"

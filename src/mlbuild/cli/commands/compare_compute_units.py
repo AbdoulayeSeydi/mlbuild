@@ -10,7 +10,7 @@ from pathlib import Path
 from ...benchmark.runner import CoreMLBenchmarkRunner, ComputeUnit
 from ...registry import LocalRegistry
 
-console = Console()
+console = Console(width=None)
 
 
 @click.command()
@@ -76,12 +76,12 @@ def compare_compute_units(build_id: str, runs: int, warmup: int):
         console.print("\n[bold]Thread Count Comparison[/bold]\n")
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Threads", style="dim")
-        table.add_column("p50 (ms)", justify="right")
-        table.add_column("p95 (ms)", justify="right")
-        table.add_column("p99 (ms)", justify="right")
-        table.add_column("Throughput (FPS)", justify="right")
-        table.add_column("Memory (MB)", justify="right")
+        table.add_column("Threads", style="dim", no_wrap=True)
+        table.add_column("p50 (ms)", justify="right", no_wrap=True)
+        table.add_column("p95 (ms)", justify="right", no_wrap=True)
+        table.add_column("p99 (ms)", justify="right", no_wrap=True)
+        table.add_column("Throughput (FPS)", justify="right", no_wrap=True)
+        table.add_column("Memory (MB)", justify="right", no_wrap=True)
 
         for label, m in results.items():
             throughput = 1000.0 / m["p50_ms"] if m["p50_ms"] > 0 else 0
@@ -130,12 +130,12 @@ def compare_compute_units(build_id: str, runs: int, warmup: int):
     console.print("\n[bold]Compute Unit Comparison[/bold]\n")
 
     table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("Compute Unit", style="dim")
-    table.add_column("p50 (ms)", justify="right")
-    table.add_column("p95 (ms)", justify="right")
-    table.add_column("p99 (ms)", justify="right")
-    table.add_column("Throughput (FPS)", justify="right")
-    table.add_column("Memory (MB)", justify="right")
+    table.add_column("Compute Unit", style="dim", no_wrap=True)
+    table.add_column("p50 (ms)", justify="right", no_wrap=True)
+    table.add_column("p95 (ms)", justify="right", no_wrap=True)
+    table.add_column("p99 (ms)", justify="right", no_wrap=True)
+    table.add_column("Throughput (FPS)", justify="right", no_wrap=True)
+    table.add_column("Memory (MB)", justify="right", no_wrap=True)
 
     for cu_name, result in results.items():
         throughput = 1000.0 / result.latency_p50 if result.latency_p50 > 0 else 0

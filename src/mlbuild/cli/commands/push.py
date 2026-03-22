@@ -27,7 +27,7 @@ from ...storage import (
     NotFoundError,
 )
 
-console = Console()
+console = Console(width=None)
 
 BUILD_ID_PATTERN = re.compile(r"^[a-f0-9]{64}$|^[a-zA-Z0-9._-]{1,128}$")
 
@@ -194,7 +194,6 @@ class PushService:
 # CLI
 # ---------------------------------------------------------
 
-@click.command()
 @click.command(help="Push builds to remote storage.")
 @click.argument("build_id", required=False)
 @click.option("--remote", help="Remote name")
