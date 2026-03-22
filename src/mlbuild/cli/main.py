@@ -583,6 +583,10 @@ cli.add_command(status_command)
 from .commands.inspect import inspect as inspect_cmd
 cli.add_command(inspect_cmd)
 
+from .commands.rename import rename
+cli.add_command(rename)
+
+
 def _register_prune():
     from .commands.prune import prune
     cli.add_command(prune)

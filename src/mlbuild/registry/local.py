@@ -545,6 +545,17 @@ class LocalRegistry:
                 (latency_p50_ms, latency_p95_ms, memory_peak_mb, build_id),
             )
 
+    def rename_build(self, build_id: str, new_name: str) -> bool:
+        """
+        Update the name of a build. Returns False if build not found.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE builds SET name = ? WHERE build_id = ? AND deleted_at IS NULL",
+                (new_name, build_id),
+            )
+            return cursor.rowcount > 0
+
     def find_baseline(
         self,
         source_hash: str,
