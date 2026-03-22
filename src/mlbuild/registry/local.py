@@ -705,13 +705,18 @@ class LocalRegistry:
             except OSError:
                 file_errors += 1
 
-        # Hard delete rows in batches (CASCADE handles benchmarks/tags/accuracy)
+        # Hard delete rows in batches — delete children first, then builds
         build_ids = [c.id for c in candidates]
         builds_deleted = 0
         for i in range(0, len(build_ids), DELETE_BATCH_SIZE):
             batch = build_ids[i:i + DELETE_BATCH_SIZE]
             placeholders = ",".join("?" * len(batch))
             with self._connect() as conn:
+                conn.execute(f"DELETE FROM benchmarks WHERE build_id IN ({placeholders})", batch)
+                conn.execute(f"DELETE FROM tags WHERE build_id IN ({placeholders})", batch)
+                conn.execute(f"DELETE FROM accuracy_checks WHERE baseline_build_id IN ({placeholders}) OR candidate_build_id IN ({placeholders})", batch + batch)
+                conn.execute(f"UPDATE runs SET build_id = NULL WHERE build_id IN ({placeholders})", batch)
+                conn.execute(f"UPDATE command_log SET linked_build_id = NULL WHERE linked_build_id IN ({placeholders})", batch)
                 cursor = conn.execute(
                     f"DELETE FROM builds WHERE build_id IN ({placeholders})",
                     batch,
