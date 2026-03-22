@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [
     {name = "Abdoulaye Seydi", email = "abdoulayeaseydi@gmail.com"}
 ]
-classifiers = [mlbuild --help
+classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.11",
