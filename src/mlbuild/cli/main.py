@@ -586,6 +586,9 @@ cli.add_command(inspect_cmd)
 from .commands.rename import rename
 cli.add_command(rename)
 
+from .commands.pin import pin, unpin
+cli.add_command(pin)
+cli.add_command(unpin)
 
 def _register_prune():
     from .commands.prune import prune

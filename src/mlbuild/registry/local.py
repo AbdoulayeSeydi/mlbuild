@@ -591,6 +591,8 @@ class LocalRegistry:
         for t in tags:
             if t == "mlbuild-baseline":
                 return True
+            if t == "mlbuild-pinned":
+                return True
             if t.startswith("main-") or t.startswith("production-"):
                 return True
         return False
@@ -862,6 +864,15 @@ class LocalRegistry:
     # Tags (Docker-style alias)
     # ------------------------------------------------------------
 
+    def is_tagged(self, build_id: str, tag: str) -> bool:
+        """Return True if the given build has the given tag."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM tags WHERE build_id = ? AND tag = ?",
+                (build_id, tag),
+            ).fetchone()
+            return row is not None
+
     def add_tag(self, build_id: str, tag: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -903,6 +914,14 @@ class LocalRegistry:
         """Delete a tag by name. No-op if tag doesn't exist."""
         with self._connect() as conn:
             conn.execute("DELETE FROM tags WHERE tag = ?", (tag,))
+
+    def remove_tag(self, build_id: str, tag: str) -> None:
+        """Remove a specific tag from a specific build."""
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM tags WHERE build_id = ? AND tag = ?",
+                (build_id, tag),
+            )
 
     def get_baseline_history(self, limit: int = 20) -> list:
         """
