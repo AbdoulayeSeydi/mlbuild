@@ -34,6 +34,9 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Workspace status | Quick health snapshot |
 | Build inspection | Single-build deep-dive via `mlbuild inspect` |
 | Registry pruning | Remove old builds via `mlbuild prune` with dry-run safety |
+| Build renaming | Rename builds in-place via `mlbuild rename` |
+| Build pinning | Protect builds from pruning via `mlbuild pin` / `mlbuild unpin` |
+| Registry search | Fuzzy search with filters via `mlbuild search` |
 
 ---
 
@@ -733,6 +736,65 @@ Protected builds (`mlbuild-baseline`, `main-*`, `production-*` tags) are always 
 
 ---
 
+#### Build Renaming
+
+Rename a build in-place without affecting benchmarks, tags, or history.
+```bash
+mlbuild rename <build_id> <new_name>
+mlbuild rename 3fa93712 mobilenet-int8-prod        # prompts for confirmation
+mlbuild rename 3fa93712 mobilenet-int8-prod --yes  # skip prompt
+```
+
+Names are mutable — build ID, artifact hash, and all linked data are unaffected.
+
+---
+
+#### Build Pinning
+
+Pin a build to protect it from `mlbuild prune`. Pinned builds are always skipped, even with `--force` or `--purge`.
+```bash
+mlbuild pin <build_id>    # protect from pruning
+mlbuild unpin <build_id>  # remove protection
+```
+
+Pin uses the reserved tag `mlbuild-pinned` under the hood. Pinned builds appear in `mlbuild prune --dry-run` output under "Skipped (protected)".
+
+---
+
+#### Registry Search
+
+Search builds by name, format, target, task, or tag. Faster than `mlbuild log` for large registries — fuzzy name matching in one query.
+```bash
+# Fuzzy search by name
+mlbuild search mobilenet
+
+# Filter by format
+mlbuild search mobilenet --format coreml
+
+# Filter by target
+mlbuild search mobilenet --target apple_m1
+
+# Filter by task
+mlbuild search --task vision
+
+# Filter by tag
+mlbuild search --tag mlbuild-baseline
+mlbuild search --tag mlbuild-pinned
+
+# Date range
+mlbuild search mobilenet --date-from 2026-03-01 --date-to 2026-03-31
+
+# Limit results
+mlbuild search mobilenet --limit 10
+
+# JSON output
+mlbuild search mobilenet --json
+```
+
+Output includes: build ID, name, format, target, task, optimization method, p50, p95, peak memory, size, and tags per result.
+
+---
+
 #### Build Export
 
 Export a build and all its data for use in external tools, pipelines, and dashboards.
@@ -1294,13 +1356,16 @@ mlbuild/
 │   │   │   ├── import_cmd.py             # mlbuild import
 │   │   │   ├── log.py                    # mlbuild log
 │   │   │   ├── optimize.py               # mlbuild optimize
+│   │   │   ├── pin.py                    # mlbuild pin / mlbuild unpin
 │   │   │   ├── profile.py                # mlbuild profile
 │   │   │   ├── prune.py                  # mlbuild prune
 │   │   │   ├── pull.py                   # mlbuild pull
 │   │   │   ├── push.py                   # mlbuild push
 │   │   │   ├── remote.py                 # mlbuild remote
+│   │   │   ├── rename.py                 # mlbuild rename
 │   │   │   ├── report.py                 # mlbuild report
 │   │   │   ├── run.py                    # mlbuild run
+│   │   │   ├── search.py                 # mlbuild search
 │   │   │   ├── status.py                 # mlbuild status
 │   │   │   ├── sync.py                   # mlbuild sync
 │   │   │   ├── tag.py                    # mlbuild tag
