@@ -590,6 +590,9 @@ from .commands.pin import pin, unpin
 cli.add_command(pin)
 cli.add_command(unpin)
 
+from .commands.search import search
+cli.add_command(search)
+
 def _register_prune():
     from .commands.prune import prune
     cli.add_command(prune)

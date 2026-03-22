@@ -507,6 +507,80 @@ class LocalRegistry:
             
             rows = conn.execute(sql, params).fetchall()
             return [self._row_to_build(r) for r in rows]
+        
+    def search_builds(
+        self,
+        query: str | None = None,
+        target: str | None = None,
+        task: str | None = None,
+        fmt: str | None = None,
+        tag: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        Search builds with fuzzy name matching and filters.
+        Returns plain dicts for easy rendering — no Build objects.
+        """
+        with self._connect() as conn:
+            where_clauses = ["b.deleted_at IS NULL"]
+            params = []
+
+            if query:
+                where_clauses.append(
+                    "(b.name LIKE ? OR b.format LIKE ? OR b.target_device LIKE ?)"
+                )
+                q = f"%{query}%"
+                params.extend([q, q, q])
+
+            if target:
+                where_clauses.append("b.target_device = ?")
+                params.append(target)
+
+            if task:
+                where_clauses.append("b.task_type = ?")
+                params.append(task)
+
+            if fmt:
+                where_clauses.append("b.format = ?")
+                params.append(fmt)
+
+            if tag:
+                where_clauses.append(
+                    "b.build_id IN (SELECT build_id FROM tags WHERE tag = ?)"
+                )
+                params.append(tag)
+
+            if date_from:
+                where_clauses.append("b.created_at >= ?")
+                params.append(date_from)
+
+            if date_to:
+                where_clauses.append("b.created_at <= ?")
+                params.append(date_to)
+
+            where_sql = " AND ".join(where_clauses)
+            params.append(limit)
+
+            rows = conn.execute(
+                f"""
+                SELECT b.build_id, b.name, b.format, b.target_device,
+                    b.task_type, b.cached_latency_p50_ms, b.cached_latency_p95_ms,
+                    b.cached_memory_peak_mb, b.size_bytes, b.created_at,
+                    b.optimization_method,
+                    GROUP_CONCAT(t.tag, ',') AS tags
+                FROM builds b
+                LEFT JOIN tags t ON t.build_id = b.build_id
+                WHERE {where_sql}
+                GROUP BY b.build_id
+                ORDER BY b.created_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+            return [dict(r) for r in rows]
     
    
     @contextmanager
