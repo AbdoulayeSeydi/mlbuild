@@ -1,7 +1,7 @@
 """
 SQLite-backed registry.
 
-Production hardened:
+Hardened:
 - Explicit transaction control
 - BEGIN IMMEDIATE writes
 - WAL mode
@@ -98,7 +98,7 @@ class _Transaction:
 
 class SQLiteRegistry:
     """
-    Production-grade SQLite registry.
+    SQLite registry.
 
     Safe under:
     - Concurrent reads
@@ -178,7 +178,7 @@ class SQLiteRegistry:
         return row["version"]
 
     # ============================================================
-    # Transaction Control (Enterprise Safe)
+    # Transaction Control
     # ============================================================
 
     @contextmanager

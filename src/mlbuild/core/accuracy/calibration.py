@@ -37,7 +37,7 @@ class CalibrationError(ValueError):
 
 class CalibrationLoader:
     """
-    Production-grade calibration loader.
+    Calibration loader.
 
     Parameters
     ----------

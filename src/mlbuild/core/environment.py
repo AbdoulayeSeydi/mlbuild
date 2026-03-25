@@ -290,7 +290,7 @@ def hash_environment(env_data: Dict[str, Any]) -> str:
 
 def validate_reproducibility() -> tuple[bool, list[str]]:
     """
-    Enterprise-grade reproducibility validation.
+    Reproducibility validation.
 
     Returns:
         is_reproducible (bool): True if environment is fully deterministic.

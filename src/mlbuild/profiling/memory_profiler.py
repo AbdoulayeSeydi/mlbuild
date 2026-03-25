@@ -73,7 +73,7 @@ class MemoryReport:
 
 class BasicMemoryProfiler:
     """
-    Enterprise-ready memory profiler for Python ML workloads.
+    Memory profiler for Python ML workloads.
 
     Features:
     - Monotonic interval RSS sampling (bounded drift)

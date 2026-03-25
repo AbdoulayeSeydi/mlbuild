@@ -2,7 +2,7 @@
 MLBuild Output Validation System
 ================================
 
-Enterprise-grade validation architecture in a single file.
+Validation architecture in a single file.
 
 Logical modules contained in this file:
 

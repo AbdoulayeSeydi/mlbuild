@@ -69,9 +69,9 @@ class WarmupMetrics:
 # Analyzer
 # -------------------------------------------------------------------------
 
-class EnterpriseWarmupAnalyzer:
+class WarmupAnalyzer:
     """
-    Production-grade CoreML warmup and stability analyzer.
+    CoreML warmup and stability analyzer.
     """
 
     def __init__(
@@ -271,7 +271,7 @@ class EnterpriseWarmupAnalyzer:
         results = {}
 
         for cu in ["cpu", "ane"]:
-            analyzer = EnterpriseWarmupAnalyzer(
+            analyzer = WarmupAnalyzer(
                 self.model_path,
                 compute_unit=cu,
                 seed=self.seed,

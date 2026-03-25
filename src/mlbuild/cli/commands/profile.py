@@ -734,7 +734,7 @@ def _display_mlprogram_profile(result):
 
 def _display_warmup_analysis_coreml(artifact_path: Path):
     try:
-        from ...profiling.warmup_analyzer import EnterpriseWarmupAnalyzer
+        from ...profiling.warmup_analyzer import WarmupAnalyzer
         from ...visualization.charts import create_warmup_curve_chart
     except ImportError as e:
         console.print(f"[yellow]Warmup analyzer unavailable: {e}[/yellow]")
@@ -744,7 +744,7 @@ def _display_warmup_analysis_coreml(artifact_path: Path):
     console.print(Rule("[bold cyan]Warmup Stability Analysis[/bold cyan]"))
     console.print()
 
-    analyzer = EnterpriseWarmupAnalyzer(artifact_path)
+    analyzer = WarmupAnalyzer(artifact_path)
     ws = analyzer.analyze(num_runs=100)
 
     t = Table(show_header=True, header_style="bold cyan")

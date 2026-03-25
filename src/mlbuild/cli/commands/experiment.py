@@ -65,7 +65,7 @@ pass_context = click.make_pass_decorator(CLIContext)
 @click.pass_context
 def experiment(ctx, config, verbose, json_output):
     """
-    Manage experiments (enterprise-grade).
+    Manage experiments.
     """
     ctx.obj = CLIContext(config, verbose, json_output)
 

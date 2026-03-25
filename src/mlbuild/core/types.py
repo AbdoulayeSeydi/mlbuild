@@ -48,7 +48,7 @@ class Build:
     """
     Represents a reproducible ML build artifact.
     
-    Immutable and schema-versioned for enterprise tracking.
+    Immutable and schema-versioned for tracking.
     Build ID now includes environment fingerprint for full reproducibility.
     """
     # Primary identifier (deterministic fingerprint)

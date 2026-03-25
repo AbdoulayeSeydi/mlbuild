@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class ONNXLoader:
-    """Enterprise-ready ONNX loader with shape inference and validation"""
+    """ONNX loader with shape inference and validation"""
     
     format_name = "onnx"
     supported_opset_min = 11

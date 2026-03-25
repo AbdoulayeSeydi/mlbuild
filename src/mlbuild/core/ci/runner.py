@@ -1,7 +1,7 @@
 """
 MLBuild CI Runner
 
-Production-grade orchestration for CI validation.
+CI orchestration and validation.
 
 Pipeline:
     1. Resolve baseline

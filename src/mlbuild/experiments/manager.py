@@ -82,7 +82,7 @@ def _validate_name(name: str) -> None:
 
 class ExperimentManager:
     """
-    Enterprise-grade experiment manager with:
+    Experiment manager with:
     - Strict validation
     - Injection-safe queries
     - Transaction boundaries

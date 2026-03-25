@@ -1,6 +1,6 @@
 """
 MLBuild Task Input System
-Enterprise-grade synthetic input generation.
+Synthetic input generation.
 
 Design goals
 ------------
