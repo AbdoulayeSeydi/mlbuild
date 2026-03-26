@@ -37,6 +37,7 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Build renaming | Rename builds in-place via `mlbuild rename` |
 | Build pinning | Protect builds from pruning via `mlbuild pin` / `mlbuild unpin` |
 | Registry search | Fuzzy search with filters via `mlbuild search` |
+| Model conversion | PyTorch → ONNX / CoreML / TFLite via `mlbuild convert` |
 
 ---
 
@@ -103,7 +104,8 @@ MLBuild is the missing on-device performance layer in your ML CI/CD stack.
 ┌─────────────────────────────▼───────────────────────────────────┐
 │  On-Device Optimization              MLBuild                    │
 │  ├── Model Packaging ──────────────── mlbuild build             │
-│  ├── Model Import ─────────────────── mlbuild import            │
+│  ├── Model Import ─────────────────── mlbuild import      
+│  ├── Model Conversion ──────────────── mlbuild convert          │
 │  ├── Task Detection ───────────────── automatic                 │
 │  ├── Performance Validation ───────── mlbuild benchmark         │
 │  ├── Quantization Benchmarking ────── mlbuild compare-quant     │
@@ -251,6 +253,77 @@ mlbuild build --model model.onnx --target android_arm64 --quantize int8
 ```
 
 ---
+
+#### Convert Models
+
+Convert raw PyTorch, ONNX, or TF SavedModel files to MLBuild-compatible formats. Once converted, the output is registered in the local registry and available to all MLBuild commands immediately.
+```bash
+# PyTorch → ONNX
+mlbuild convert --model ./model.pt --to onnx
+
+# PyTorch → CoreML (--target required)
+mlbuild convert --model ./model.pt --to coreml --target apple_m2
+
+# PyTorch → TFLite (chained via ONNX automatically)
+mlbuild convert --model ./model.pt --to tflite
+
+# TF SavedModel → TFLite
+mlbuild convert --model ./saved_model/ --to tflite
+
+# With quantization
+mlbuild convert --model ./model.pt --to coreml --target apple_a17 --quantize fp16
+
+# Preview conversion plan without executing
+mlbuild convert --model ./model.pt --to tflite --dry-run
+
+# Keep intermediate artifacts (e.g. ONNX on the way to TFLite)
+mlbuild convert --model ./model.pt --to tflite --keep-intermediate
+```
+
+**Supported conversion paths:**
+
+| Input | Output | Via |
+|---|---|---|
+| `.pt` / `.pth` | `onnx` | `torch.onnx.export` |
+| `.pt` / `.pth` | `coreml` | `torch.jit.trace` → `coremltools` |
+| `.pt` / `.pth` | `tflite` | ONNX intermediate → `onnx2tf` |
+| `.onnx` | `coreml` | `coremltools` |
+| `.onnx` | `tflite` | `onnx2tf` |
+| `saved_model/` | `tflite` | `tf.lite.TFLiteConverter` |
+
+**Options:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--to` | required | Output format: `onnx`, `coreml`, `tflite` |
+| `--target` | required for CoreML | `apple_m1` \| `apple_m2` \| `apple_m3` \| `apple_a15` \| `apple_a16` \| `apple_a17` \| `apple_a18` |
+> **Targets specify a minimum OS deployment version, not a specific chip.** Multiple Apple chips share the same target. Models using newer features (e.g. int4 quantization) require higher OS targets regardless of chip selection — MLBuild will error early if your model and target are incompatible.
+| `--input-shape` | `1,3,224,224` | Comma-separated input shape for tracing |
+| `--quantize` | `fp32` | `fp32` or `fp16` — int8 requires a representative dataset and is not yet supported |
+| `--load-mode` | `auto` | `auto`, `jit`, `eager` — controls how PyTorch model is loaded |
+| `--opset` | auto | ONNX opset version override (default tries 17→16→15→14→13→12) |
+| `--keep-intermediate` | off | Register intermediate artifacts (e.g. ONNX) alongside final output |
+| `--no-register` | off | Convert without adding to MLBuild registry |
+| `--dry-run` | off | Print conversion plan without executing |
+| `--debug` | off | Preserve temp files even on success |
+| `--timeout` | `300` | Per-step timeout in seconds |
+
+> **PyTorch model format requirement:** `mlbuild convert` requires PyTorch models to be saved as TorchScript. Plain `torch.save(model, path)` on a class defined interactively will fail with a pickle error when MLBuild tries to load it in a different context.
+>
+> Save your model as TorchScript before converting:
+> ```python
+> # Recommended — trace-based (works for most vision models)
+> traced = torch.jit.trace(model, torch.zeros(1, 3, 224, 224))
+> traced.save("model.pt")
+>
+> # Alternative — script-based (required for models with control flow)
+> scripted = torch.jit.script(model)
+> scripted.save("model.pt")
+> ```
+> Models saved from a proper `.py` file (not an interactive session) can also be loaded with `--load-mode eager`.
+
+---
+
 
 #### Import Pre-built Models
 
@@ -1210,6 +1283,11 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - Quantization: FP32 / FP16 / INT8
 - Deterministic builds (content-addressed)
 - ONNX graph storage for re-conversion
+- PyTorch (.pt/.pth) → ONNX / CoreML / TFLite via `mlbuild convert`
+- TF SavedModel → TFLite via `mlbuild convert`
+- Automatic multi-step chaining (e.g. PyTorch → ONNX → TFLite in one command)
+- Intermediate artifact tracking with `--keep-intermediate`
+- Per-step output validation, caching, and timeout
 
 ### Import Pre-built Models
 - Import existing `.onnx`, `.tflite`, `.mlmodel`, `.mlpackage` files directly
@@ -1342,7 +1420,8 @@ mlbuild/
 │   │   │   ├── benchmark.py              # mlbuild benchmark
 │   │   │   ├── budget.py                 # mlbuild budget
 │   │   │   ├── build.py                  # mlbuild build
-│   │   │   ├── ci.py                     # mlbuild ci + ci-check
+│   │   │   ├── convert.py                # mlbuild convert
+│   │   │   ├── ci.py                     # mlbuild ci + ci-checkheck
 │   │   │   ├── compare.py                # mlbuild compare
 │   │   │   ├── compare_compute_units.py  # mlbuild compare-compute-units
 │   │   │   ├── compare_quantization.py   # mlbuild compare-quantization
@@ -1371,16 +1450,25 @@ mlbuild/
 │   │   │   ├── tag.py                    # mlbuild tag
 │   │   │   ├── upgrade.py                # mlbuild upgrade
 │   │   │   └── validate.py               # mlbuild validate
-│   │   └── main.py                       # CLI entry point
+│   └── main.py                       # CLI entry point
 │   ├── backends/
 │   │   ├── base.py                       # Backend base class
 │   │   ├── registry.py                   # Backend auto-discovery
 │   │   ├── coreml/                       # CoreML exporter + deep profiler
 │   │   ├── tflite/                       # TFLite backend + deep profiler
 │   │   └── onnxruntime/                  # ONNX Runtime backend
-│   ├── benchmark/
-│   │   ├── runner.py                     # Benchmark runner + stats
-│   │   └── device_runner.py              # Device benchmark runner
+│   ├── convert/
+│   │   ├── __init__.py
+│   │   ├── cache.py                      # Step-level cache keys with env version awareness
+│   │   ├── coreml.py                     # PyTorch/ONNX → CoreML executors + TARGET_OS_MAP
+│   │   ├── detector.py                   # Input format detection from path
+│   │   ├── feature_compat.py             # Feature → OS compatibility validation (hard/soft)
+│   │   ├── graph.py                      # Conversion DAG + BFS path resolution
+│   │   ├── pytorch.py                    # PyTorch → ONNX executor
+│   │   ├── service.py                    # Pipeline orchestration (cache, timeout, temp dirs)
+│   │   ├── tensorflow.py                 # ONNX/SavedModel → TFLite executors
+│   │   ├── types.py                      # ConvertContext, ConvertOutput, StepResult, ConvertResult
+│   │   └── validator.py                  # Per-format artifact validation
 │   ├── core/
 │   │   ├── budget.py                     # Budget load/save/merge/validate
 │   │   ├── accuracy/

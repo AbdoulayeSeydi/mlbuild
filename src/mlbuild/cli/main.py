@@ -190,7 +190,7 @@ _EXCLUDED_FROM_HISTORY = frozenset({
     required=True,
     type=click.Choice([
         # Apple
-        "apple_a17", "apple_a16", "apple_a15", 
+        "apple_a18", "apple_a17", "apple_a16", "apple_a15",
         "apple_m3", "apple_m2", "apple_m1",
         # Android
         "android_arm64", "android_arm32", "android_x86",
@@ -585,6 +585,9 @@ cli.add_command(inspect_cmd)
 
 from .commands.rename import rename
 cli.add_command(rename)
+
+from .commands.convert import convert as convert_command
+cli.add_command(convert_command)
 
 from .commands.pin import pin, unpin
 cli.add_command(pin)

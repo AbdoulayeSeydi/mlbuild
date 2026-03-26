@@ -87,7 +87,7 @@ def _detect_apple_target(brand: str) -> str:
     if brand.startswith("apple m1"):
         return "apple_m1"
 
-    # Future Apple chips (M4, M5, etc.)
+    # Unrecognised Apple Silicon — treat as generic arm
     if brand.startswith("apple"):
         return "apple_arm"
 

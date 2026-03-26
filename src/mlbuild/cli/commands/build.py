@@ -145,7 +145,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
 @click.option(
     "--target",
     required=True,
-    type=click.Choice(["apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1", "android_arm64", "android_arm32", "raspberry_pi"]),
+    type=click.Choice(["apple_a18", "apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1", "android_arm64", "android_arm32", "raspberry_pi"]),
 )
 @click.option("--name")
 @click.option(

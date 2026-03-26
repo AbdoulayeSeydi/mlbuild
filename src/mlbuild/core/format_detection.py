@@ -109,6 +109,7 @@ _TARGET_TO_FAMILY: Dict[str, TargetFamily] = {
     "apple_a15":      "apple_ios",
     "apple_a16":      "apple_ios",
     "apple_a17":      "apple_ios",
+    "apple_a18":      "apple_ios",
     # Android
     "android_arm64":  "android",
     "android_arm32":  "android",

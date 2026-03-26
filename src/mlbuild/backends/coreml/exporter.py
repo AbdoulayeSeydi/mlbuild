@@ -41,12 +41,9 @@ def _supports_native_int8(target: str) -> bool:
     M1/M2/M3 = Weight-only (W8A16) recommended
     """
     # A17 Pro and newer support W8A8
-    if target in ["apple_a17"]:
+    if target in ["apple_a17", "apple_a18"]:
         return True
-    
-    # M4 would go here (not in our target list yet)
-    # if target in ["apple_m4"]:
-    #     return True
+
     
     # M1/M2/M3 do NOT have native INT8 compute
     if target in ["apple_m1", "apple_m2", "apple_m3"]:
@@ -71,13 +68,14 @@ def discover_available_targets() -> dict[str, tuple]:
     
     # Try to get all possible targets
     target_candidates = {
-    "apple_a17": ("iOS17", "iOS17"),  # Use iOS17
-    "apple_a16": ("iOS17", "iOS17"),
-    "apple_a15": ("iOS16", "iOS16"),
-    "apple_m3": ("macOS14", "macOS14"),  # Use macOS14
-    "apple_m2": ("macOS14", "macOS14"),
-    "apple_m1": ("macOS13", "macOS13"),
-}
+        "apple_a18": ("iOS18", "iOS18"),
+        "apple_a17": ("iOS17", "iOS17"),
+        "apple_a16": ("iOS16", "iOS16"),
+        "apple_a15": ("iOS16", "iOS16"),
+        "apple_m3":  ("macOS15", "macOS15"),
+        "apple_m2":  ("macOS14", "macOS14"),
+        "apple_m1":  ("macOS13", "macOS13"),
+    }
     
     for device, (target_attr, display) in target_candidates.items():
         try:
