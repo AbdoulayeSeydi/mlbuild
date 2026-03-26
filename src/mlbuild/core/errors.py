@@ -34,7 +34,9 @@ class ExitCode(int, Enum):
     CONVERSION_ERROR = 12
     VALIDATION_ERROR = 13
     BENCHMARK_ERROR = 14
-
+    CONVERT_ERROR = 15
+    CONVERSION_CANCELLED = 16
+    
     INTERNAL_ERROR = 99
 
 
@@ -67,6 +69,11 @@ class ErrorCode(str, Enum):
     MODEL_LOAD_FAILED = "E3001"
     CONVERSION_FAILED = "E3002"
     UNSUPPORTED_OPERATOR = "E3003"
+    CONVERSION_CANCELLED = "E3004"
+    CONVERSION_TIMEOUT   = "E3005"
+    CONVERSION_CACHED    = "E3006"
+    NO_CONVERSION_PATH   = "E3007"
+    STATE_DICT_DETECTED  = "E3008"
 
     # 4xxx – Benchmark / Device
     BENCHMARK_FAILED = "E4001"
@@ -248,6 +255,53 @@ class ConversionError(MLBuildError):
             **kwargs,
         )
 
+class ConvertError(MLBuildError):
+    """
+    Pipeline-level conversion error.
+    Distinct from ConversionError (operator-level).
+    Used by mlbuild convert for routing, timeout, and validation failures.
+    """
+    def __init__(
+        self,
+        message: str,
+        stage: Optional[str] = None,
+        error_code: ErrorCode = ErrorCode.CONVERSION_FAILED,
+        **kwargs,
+    ):
+        super().__init__(
+            message=message,
+            error_code=error_code,
+            category=ErrorCategory.MODEL,
+            exit_code=ExitCode.CONVERT_ERROR,
+            stage=stage,
+            **kwargs,
+        )
+
+
+class ConversionCancelled(MLBuildError):
+    """
+    Raised on SIGINT (Ctrl+C) during a conversion run.
+    Signals clean cancellation — not a failure.
+    Temp files are preserved on this exit path.
+    """
+    def __init__(
+        self,
+        stage: Optional[str] = None,
+        run_id: Optional[str] = None,
+        tmp_dir: Optional[str] = None,
+    ):
+        super().__init__(
+            message="Conversion cancelled by user.",
+            error_code=ErrorCode.CONVERSION_CANCELLED,
+            category=ErrorCategory.USER,
+            exit_code=ExitCode.CONVERSION_CANCELLED,
+            stage=stage,
+            context={
+                "run_id": run_id,
+                "tmp_dir": tmp_dir,
+            },
+        )
+
 
 class ModelValidationError(MLBuildError):
     def __init__(self, message: str, artifact: Optional[str] = None, **kwargs):
@@ -297,6 +351,8 @@ __all__ = [
     "ModelLoadError",
     "UnsupportedModelError",
     "ConversionError",
+    "ConvertError",
+    "ConversionCancelled",
     "ModelValidationError",
     "BenchmarkError",
     "InternalError",
