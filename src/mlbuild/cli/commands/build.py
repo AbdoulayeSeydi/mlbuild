@@ -1,15 +1,30 @@
 """
-Build command: Convert ONNX → CoreML and register artifact.
+Build command: Convert ONNX → CoreML / TFLite and register artifact.
 
 Infrastructure guarantees:
 - Deterministic build ID (includes environment fingerprint)
 - Atomic artifact promotion
 - Integrity verification after move
 - Full reproducibility tracking
+- ModelProfile stored alongside task_type (Step 4)
+
+Step 4 additions
+----------------
+- --force-domain / --force-subtype / --force-execution CLI flags
+- --task deprecated → maps to --force-domain with a warning
+- --dynamic-sweep accepted (logs not-yet-implemented)
+- build_profile() called after detect_task()
+- _assert_profile_consistency() migration guard active
+- benchmark_caveats populated from ExecutionMode + Subtype
+- input_roles populated from build_input_schemas_with_roles()
+- model_profile_json serialized and stored on Build
+- Subtype + ExecutionMode shown in success output
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
 import shutil
@@ -18,7 +33,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 from decimal import Decimal
-from xml.parsers.expat import model
+from typing import List, NamedTuple, Optional
 
 import click
 from rich.console import Console
@@ -47,28 +62,60 @@ from ...registry import LocalRegistry
 from ...core.types import Build
 from ...core.errors import MLBuildError
 
-# --- PATCH: task detection + validation config ---
-from ...core.task_detection import detect_task, detection_warning, ModelInfo, TaskType
+# ── Task detection (v1 + v2 imports) ─────────────────────────────────────────
+from ...core.task_detection import (
+    detect_task,
+    detection_warning,
+    build_profile,
+    _assert_profile_consistency,
+    ModelInfo,
+    TensorInfo,
+    TaskType,
+    Domain,
+    Subtype,
+    ExecutionMode,
+    ModelProfile,
+)
+
+# ── Input schema builder (v2) ─────────────────────────────────────────────────
+from ...core.task_inputs import build_input_schemas_with_roles
+
+# ── Output validation config ──────────────────────────────────────────────────
 from ...core.task_validation import StrictOutputConfig
 
-console = Console(width=None)
+logger   = logging.getLogger(__name__)
+console  = Console(width=None)
 
 
-# ---------------------------------------------------------------------
+# ============================================================
+# Detection result container
+# ============================================================
+
+class _Detection(NamedTuple):
+    """
+    Returned by _detect_task_from_onnx().
+    Bundles ModelInfo, DetectionResult, and ModelProfile
+    so all three travel together through the build pipeline.
+    """
+    info:    ModelInfo
+    result:  object          # DetectionResult (kept as object to avoid circular import noise)
+    profile: ModelProfile
+
+
+# ============================================================
 # Helpers
-# ---------------------------------------------------------------------
+# ============================================================
 
 def _structured_build_id(
-    source_hash: str,
-    config_hash: str,
-    artifact_hash: str,
+    source_hash:     str,
+    config_hash:     str,
+    artifact_hash:   str,
     env_fingerprint: str,
     mlbuild_version: str,
 ) -> str:
     """
     Compute deterministic build ID.
-    
-    Build ID = SHA256(source_hash || config_hash || artifact_hash || env_fingerprint || version)
+    SHA256(source_hash || config_hash || artifact_hash || env_fingerprint || version)
     """
     return hashlib.sha256(
         b"\x00".join([
@@ -76,7 +123,7 @@ def _structured_build_id(
             bytes.fromhex(config_hash),
             bytes.fromhex(artifact_hash),
             bytes.fromhex(env_fingerprint),
-            mlbuild_version.encode('utf-8'),
+            mlbuild_version.encode("utf-8"),
         ])
     ).hexdigest()
 
@@ -91,7 +138,7 @@ def _read_global_strict() -> bool:
         config_path = Path(".mlbuild/config.toml")
         if not config_path.exists():
             return False
-        import tomllib  # Python 3.11+
+        import tomllib
         with config_path.open("rb") as f:
             data = tomllib.load(f)
         return bool(data.get("validation", {}).get("strict_output", False))
@@ -99,53 +146,276 @@ def _read_global_strict() -> bool:
         return False
 
 
-# ---------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------
+def _apply_force_overrides(
+    profile:        ModelProfile,
+    force_domain:   Optional[str],
+    force_subtype:  Optional[str],
+    force_execution: Optional[str],
+) -> ModelProfile:
+    """
+    Apply --force-domain / --force-subtype / --force-execution overrides.
 
-@click.command()
-@click.argument('build_id')
-@click.option('--runs', default=100, type=int, help='Number of benchmark runs')
-@click.option('--warmup', default=20, type=int, help='Number of warmup runs')
-@click.option(
-    '--compute-unit',
-    type=click.Choice(['CPU_ONLY', 'CPU_AND_GPU', 'ALL']),
-    default='ALL',
-    help='Compute unit'
-)
-@click.option('--json', 'as_json', is_flag=True, help='Output as JSON')
-def benchmark(build_id, runs, warmup, compute_unit, as_json):
-    """Benchmark a build on current device."""
-    from ..commands.benchmark import benchmark as benchmark_cmd
+    Any override sets confidence=1.0 and confidence_tier="graph" to signal
+    that the profile was explicitly specified, not inferred.
+    Logs the override so consumers can distinguish forced vs auto-detected profiles.
+    """
+    if not any([force_domain, force_subtype, force_execution]):
+        return profile
 
-    ctx = click.get_current_context()
+    try:
+        domain    = Domain(force_domain)          if force_domain    else profile.domain
+        subtype   = Subtype(force_subtype)         if force_subtype   else profile.subtype
+        execution = ExecutionMode(force_execution) if force_execution else profile.execution
+    except ValueError as e:
+        console.print(f"\n[red]Invalid override value:[/red] {e}\n")
+        sys.exit(1)
 
-    ctx.invoke(
-        benchmark_cmd,
-        build_id=build_id,
-        runs=runs,
-        warmup=warmup,
-        compute_unit=compute_unit,
-        as_json=as_json,
+    overrides = {k: v for k, v in [
+        ("domain",    force_domain),
+        ("subtype",   force_subtype),
+        ("execution", force_execution),
+    ] if v}
+
+    override_str = "  ".join(f"{k}={v}" for k, v in overrides.items())
+    console.print(f"[dim]User override applied — {override_str}[/dim]")
+    logger.info("force_overrides_applied  %s", override_str)
+
+    return ModelProfile(
+        domain          = domain,
+        subtype         = subtype,
+        execution       = execution,
+        confidence      = 1.0,
+        confidence_tier = "graph",
+        nms_inside      = profile.nms_inside,
+        state_optional  = profile.state_optional,
     )
 
 
+def _build_benchmark_caveats(profile: ModelProfile) -> List[str]:
+    """
+    Build the machine-readable benchmark limitation notes for a ModelProfile.
+    These travel with every benchmark record so automated pipelines can check
+    limitations without reading log output.
+    """
+    caveats: List[str] = []
+
+    if profile.execution == ExecutionMode.KV_CACHE:
+        caveats.append(
+            "Single-pass KV-cache benchmark. Token-by-token generation latency "
+            "not captured. Per-token latency will be lower; first-token latency "
+            "will be higher."
+        )
+
+    elif profile.execution == ExecutionMode.PARTIALLY_STATEFUL:
+        caveats.append(
+            "Partially stateful model — state inputs are optional and were omitted. "
+            "Benchmark reflects cold-start latency. Warm-start latency (with state) "
+            "will differ."
+        )
+
+    elif profile.execution == ExecutionMode.STATEFUL:
+        caveats.append(
+            "Stateful model — running single-pass approximation with zero initial "
+            "state. Benchmark reflects cold-start latency only. Real stateful "
+            "latency will differ."
+        )
+
+    if profile.subtype == Subtype.TIMESERIES:
+        caveats.append(
+            "Time-series model — assumed fixed window input (T=96). Model may "
+            "expect rolling context; benchmark reflects single-window latency only."
+        )
+
+    if profile.subtype == Subtype.NONE and profile.confidence < 0.5:
+        caveats.append(
+            "Model task could not be confidently classified — inputs generated "
+            "from shape metadata only."
+        )
+
+    return caveats
+
+
+def _profile_to_json(profile: ModelProfile) -> str:
+    """Serialize ModelProfile to a stable JSON string."""
+    return json.dumps({
+        "domain":          profile.domain.value,
+        "subtype":         profile.subtype.value,
+        "execution":       profile.execution.value,
+        "confidence":      round(profile.confidence, 4),
+        "confidence_tier": profile.confidence_tier,
+        "nms_inside":      profile.nms_inside,
+        "state_optional":  profile.state_optional,
+    }, sort_keys=True)
+
+
+# ============================================================
+# Shared helper: ModelInfo + DetectionResult + ModelProfile
+# ============================================================
+
+def _detect_task_from_onnx(
+    onnx_model,
+    forced_task:     Optional[str] = None,
+    force_domain:    Optional[str] = None,
+    force_subtype:   Optional[str] = None,
+    force_execution: Optional[str] = None,
+) -> _Detection:
+    """
+    Build ModelInfo from a loaded ONNX model, run three-tier task detection,
+    build ModelProfile, and apply any --force-* overrides.
+
+    Parameters
+    ----------
+    onnx_model      : loaded onnx.ModelProto
+    forced_task     : legacy --task value (deprecated → maps to --force-domain)
+    force_domain    : --force-domain override (e.g. "vision")
+    force_subtype   : --force-subtype override (e.g. "detection")
+    force_execution : --force-execution override (e.g. "kv_cache")
+
+    Returns
+    -------
+    _Detection(info, result, profile)
+    """
+    import numpy as np
+
+    graph = onnx_model.graph
+
+    _ONNX_TO_NP = {
+        1: np.float32, 2: np.uint8,   3: np.int8,
+        5: np.int32,   6: np.int32,   7: np.int64,
+        10: np.float16, 11: np.float64,
+    }
+
+    # ── Build TensorInfo for inputs ─────────────────────────────────────────
+    inputs = []
+    # Collect initializer names — inputs with a default initializer are optional
+    initializer_names = {init.name for init in graph.initializer}
+
+    for inp in graph.input:
+        shape = []
+        for dim in inp.type.tensor_type.shape.dim:
+            shape.append(dim.dim_value if dim.dim_value > 0 else -1)
+
+        elem_type = inp.type.tensor_type.elem_type
+        dtype     = _ONNX_TO_NP.get(elem_type)
+
+        # is_optional=True when the input has a default initializer value
+        is_optional = inp.name in initializer_names
+
+        inputs.append(TensorInfo(
+            name        = inp.name,
+            shape       = tuple(shape) if shape else None,
+            dtype       = dtype,
+            is_optional = is_optional,
+        ))
+
+    # ── Build TensorInfo for outputs ────────────────────────────────────────
+    outputs = []
+    for out in graph.output:
+        shape = []
+        for dim in out.type.tensor_type.shape.dim:
+            shape.append(dim.dim_value if dim.dim_value > 0 else -1)
+        dtype = _ONNX_TO_NP.get(out.type.tensor_type.elem_type)
+        outputs.append(TensorInfo(
+            name  = out.name,
+            shape = tuple(shape) if shape else None,
+            dtype = dtype,
+        ))
+
+    op_types = {node.op_type for node in graph.node}
+
+    metadata = {}
+    for prop in onnx_model.metadata_props:
+        metadata[prop.key] = prop.value
+
+    info = ModelInfo(
+        format     = "onnx",
+        inputs     = inputs,
+        outputs    = outputs,
+        op_types   = op_types,
+        node_count = len(graph.node),
+        metadata   = metadata,
+    )
+
+    # ── Handle --task deprecation ────────────────────────────────────────────
+    # --task mapped to domain only (no subtype info). Emit deprecation warning.
+    effective_force_domain = force_domain
+    if forced_task and forced_task != "unknown" and not force_domain:
+        console.print(
+            f"[yellow]⚠  --task is deprecated. "
+            f"Use --force-domain {forced_task} instead.[/yellow]"
+        )
+        logger.warning(
+            "deprecated_flag_task  value=%s  "
+            "use --force-domain %s instead",
+            forced_task, forced_task,
+        )
+        effective_force_domain = forced_task
+
+    # ── Detection ────────────────────────────────────────────────────────────
+    # forced_task kept for detect_task() backward compat (GRAPH-tier override)
+    forced = TaskType.from_str(forced_task) if forced_task and forced_task != "unknown" else None
+    result  = detect_task(info, forced=forced.value if forced else None)
+    profile = build_profile(info, result)
+
+    # ── Migration consistency guard ──────────────────────────────────────────
+    _assert_profile_consistency(result.primary, profile)
+
+    # ── Apply --force-* overrides ────────────────────────────────────────────
+    profile = _apply_force_overrides(
+        profile,
+        force_domain    = effective_force_domain,
+        force_subtype   = force_subtype,
+        force_execution = force_execution,
+    )
+
+    return _Detection(info=info, result=result, profile=profile)
+
+
+# ============================================================
+# CLI — benchmark sub-command  (unchanged)
+# ============================================================
+
 @click.command()
+@click.argument("build_id")
+@click.option("--runs",    default=100,  type=int)
+@click.option("--warmup",  default=20,   type=int)
 @click.option(
-    "--model",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),
+    "--compute-unit",
+    type=click.Choice(["CPU_ONLY", "CPU_AND_GPU", "ALL"]),
+    default="ALL",
 )
+@click.option("--json", "as_json", is_flag=True)
+def benchmark(build_id, runs, warmup, compute_unit, as_json):
+    """Benchmark a build on current device."""
+    from ..commands.benchmark import benchmark as benchmark_cmd
+    ctx = click.get_current_context()
+    ctx.invoke(
+        benchmark_cmd,
+        build_id=build_id, runs=runs, warmup=warmup,
+        compute_unit=compute_unit, as_json=as_json,
+    )
+
+
+# ============================================================
+# CLI — build command  (Step 4 flag additions)
+# ============================================================
+
+@click.command()
+@click.option("--model",   required=True, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--backend",
     type=click.Choice(["coreml", "tflite"]),
     default="coreml",
-    help="Backend to use for conversion"
+    help="Backend to use for conversion",
 )
 @click.option(
     "--target",
     required=True,
-    type=click.Choice(["apple_a18", "apple_a17", "apple_a16", "apple_a15", "apple_m3", "apple_m2", "apple_m1", "android_arm64", "android_arm32", "raspberry_pi"]),
+    type=click.Choice([
+        "apple_a18", "apple_a17", "apple_a16", "apple_a15",
+        "apple_m3", "apple_m2", "apple_m1",
+        "android_arm64", "android_arm32", "raspberry_pi",
+    ]),
 )
 @click.option("--name")
 @click.option(
@@ -154,33 +424,80 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
     default="fp32",
 )
 @click.option("--notes")
-# --- PATCH: --task flag ---
+
+# ── Legacy flag (deprecated, kept for backward compat) ──────────────────────
 @click.option(
     "--task",
     type=click.Choice(["vision", "nlp", "audio", "unknown"]),
     default=None,
-    help="Model task type. Auto-detected from ONNX graph if omitted.",
+    help="[Deprecated] Use --force-domain instead.",
 )
-# --- PATCH: --strict-output flag ---
+
+# ── New override flags (Step 4) ──────────────────────────────────────────────
 @click.option(
-    "--strict-output",
-    "strict_output",
-    is_flag=True,
-    default=False,
+    "--force-domain", "force_domain",
+    type=click.Choice(["vision", "nlp", "audio", "tabular"]),
+    default=None,
+    help="Override auto-detected domain.",
+)
+@click.option(
+    "--force-subtype", "force_subtype",
+    type=click.Choice([
+        "detection", "segmentation", "timeseries",
+        "recommendation", "generative", "multimodal", "none",
+    ]),
+    default=None,
+    help="Override auto-detected behavioral subtype.",
+)
+@click.option(
+    "--force-execution", "force_execution",
+    type=click.Choice([
+        "standard", "stateful", "partially_stateful", "kv_cache", "multi_input",
+    ]),
+    default=None,
+    help="Override auto-detected execution mode. Useful for debugging backend differences.",
+)
+@click.option(
+    "--dynamic-sweep", "dynamic_sweep",
+    type=str,
+    default=None,
+    help="[Not yet implemented] Sweep dynamic dimensions. e.g. seq_len=32,64,128",
+)
+
+# ── Strict output flag (unchanged) ──────────────────────────────────────────
+@click.option(
+    "--strict-output", "strict_output",
+    is_flag=True, default=False,
     help="Hard-fail on output validation warnings (overrides config.toml).",
 )
-def build(model: Path, backend: str, target: str, name: str, quantize: str, notes: str,
-          task: str, strict_output: bool):
+def build(
+    model:           Path,
+    backend:         str,
+    target:          str,
+    name:            str,
+    quantize:        str,
+    notes:           str,
+    task:            Optional[str],
+    force_domain:    Optional[str],
+    force_subtype:   Optional[str],
+    force_execution: Optional[str],
+    dynamic_sweep:   Optional[str],
+    strict_output:   bool,
+):
+    # --dynamic-sweep: flag accepted, implementation deferred
+    if dynamic_sweep is not None:
+        console.print(
+            "[dim]--dynamic-sweep flag received. "
+            "Sweep mode is not yet implemented — running with single resolved shape.[/dim]\n"
+        )
+        logger.info("dynamic_sweep_flag_received  value=%s  not_yet_implemented", dynamic_sweep)
 
-    # --- PATCH: resolve StrictOutputConfig once, used downstream ---
     strict_cfg = StrictOutputConfig.from_command(
-        strict_flag=strict_output,
-        global_strict=_read_global_strict(),
+        strict_flag   = strict_output,
+        global_strict = _read_global_strict(),
     )
 
-    # ============================================================
-    # RESOLVE BACKEND
-    # ============================================================
+    # ── Resolve backend ──────────────────────────────────────────────────────
     from ...backends.registry import BackendRegistry
 
     try:
@@ -189,36 +506,33 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         console.print(f"\n[red]Backend Error:[/red] {e}\n")
         sys.exit(1)
 
-    # If backend has its own build method, use it
+    # ============================================================
+    # TFLite path
+    # ============================================================
     if backend != "coreml":
         try:
-            # ---------------------------------------------------------
-            # Mirror CoreML pipeline: collect env, hash, convert, promote
-            # ---------------------------------------------------------
-            env_data = collect_environment()
+            env_data        = collect_environment()
             env_fingerprint = hash_environment(env_data)
-
-            source_hash = compute_source_hash(model)
+            source_hash     = compute_source_hash(model)
 
             config = {
-                "target": target,
+                "target":       target,
                 "quantization": {"type": quantize},
-                "optimizer": {},
+                "optimizer":    {},
             }
             config_hash = compute_config_hash(config)
 
             console.print(f"\n[bold]Building:[/bold] {Path(model).name}")
             console.print(f"Backend: {backend}")
-            console.print(f"Target: {target}")
+            console.print(f"Target:  {target}")
             console.print(f"Quantization: {quantize}\n")
 
-            # Generate representative dataset for INT8 calibration
             representative_dataset = None
             if quantize == "int8":
                 console.print("[dim]Generating INT8 calibration data...[/dim]")
                 import onnx
                 import numpy as np
-                onnx_model = onnx.load(str(model))
+                onnx_model   = onnx.load(str(model))
                 input_shapes = backend_inst._get_input_shapes(onnx_model)
                 def _make_representative_dataset(shapes):
                     def generator():
@@ -228,33 +542,27 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 representative_dataset = _make_representative_dataset(input_shapes)
 
             with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-                task_progress = p.add_task(f"Converting to TFLite ({quantize.upper()})...", total=None)
+                tp = p.add_task(f"Converting to TFLite ({quantize.upper()})...", total=None)
                 tflite_path = backend_inst._export(
-                    model_path=Path(model),
-                    quantize=quantize,
-                    name=name,
-                    representative_dataset=representative_dataset,
+                    model_path            = Path(model),
+                    quantize              = quantize,
+                    name                  = name,
+                    representative_dataset= representative_dataset,
                 )
-                p.update(task_progress, completed=True)
+                p.update(tp, completed=True)
 
             artifact_hash = compute_source_hash(tflite_path)
-
-            build_id = _structured_build_id(
-                source_hash,
-                config_hash,
-                artifact_hash,
-                env_fingerprint,
-                MLBUILD_VERSION,
+            build_id      = _structured_build_id(
+                source_hash, config_hash, artifact_hash,
+                env_fingerprint, MLBUILD_VERSION,
             )
 
-            # Promote artifact into content-addressed directory
             artifacts_root = Path(".mlbuild/artifacts").resolve()
-            final_path = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
+            final_path     = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
             artifacts_root.mkdir(parents=True, exist_ok=True)
 
             if not final_path.exists():
                 shutil.copy2(str(tflite_path), str(final_path))
-                # Store ONNX graph once for optimize command
                 graphs_root = Path(".mlbuild/graphs").resolve()
                 graphs_root.mkdir(parents=True, exist_ok=True)
                 graph_dest = graphs_root / f"{build_id}.onnx"
@@ -269,59 +577,73 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 import onnx2tf
                 backend_versions["onnx2tf"] = onnx2tf.__version__
 
-            # --- PATCH: task detection for TFLite (Tier 2/3 only — no ONNX graph) ---
             import onnx
             onnx_model = onnx.load(str(model))
-            task_info = _detect_task_from_onnx(onnx_model, forced_task=task)
-            warn = detection_warning(task_info)
+            detection  = _detect_task_from_onnx(
+                onnx_model,
+                forced_task     = task,
+                force_domain    = force_domain,
+                force_subtype   = force_subtype,
+                force_execution = force_execution,
+            )
+
+            warn = detection_warning(detection.result)
             if warn:
                 console.print(f"\n[yellow]{warn}[/yellow]")
 
+            # Build input roles and benchmark caveats
+            _, input_roles = build_input_schemas_with_roles(
+                detection.info, detection.result, detection.profile,
+            )
+            benchmark_caveats = _build_benchmark_caveats(detection.profile)
+            model_profile_json = _profile_to_json(detection.profile)
+
             build_obj = Build(
-                build_id=build_id,
-                artifact_hash=artifact_hash,
-                source_hash=source_hash,
-                config_hash=config_hash,
-                env_fingerprint=env_fingerprint,
-                name=name,
-                notes=notes,
-                created_at=datetime.now(timezone.utc),
-                source_path=str(Path(model).resolve()),
-                target_device=target,
-                format=backend,
-                quantization=config["quantization"],
-                optimizer_config=config["optimizer"],
-                backend_versions=backend_versions,
-                environment_data=env_data,
-                mlbuild_version=MLBUILD_VERSION,
-                python_version=env_data["python"]["version"],
-                platform=env_data["hardware"]["cpu"]["system"],
-                os_version=env_data["hardware"]["cpu"]["release"],
-                artifact_path=str(final_path),
-                size_mb=size_mb,
-                has_graph=True,
-                graph_format="onnx",
-                graph_path=graph_path,
-                task_type=task_info.primary.value,  # --- PATCH ---
+                build_id         = build_id,
+                artifact_hash    = artifact_hash,
+                source_hash      = source_hash,
+                config_hash      = config_hash,
+                env_fingerprint  = env_fingerprint,
+                name             = name,
+                notes            = notes,
+                created_at       = datetime.now(timezone.utc),
+                source_path      = str(Path(model).resolve()),
+                target_device    = target,
+                format           = backend,
+                quantization     = config["quantization"],
+                optimizer_config = config["optimizer"],
+                backend_versions = backend_versions,
+                environment_data = env_data,
+                mlbuild_version  = MLBUILD_VERSION,
+                python_version   = env_data["python"]["version"],
+                platform         = env_data["hardware"]["cpu"]["system"],
+                os_version       = env_data["hardware"]["cpu"]["release"],
+                artifact_path    = str(final_path),
+                size_mb          = size_mb,
+                has_graph        = True,
+                graph_format     = "onnx",
+                graph_path       = graph_path,
+                task_type        = detection.profile.domain.value,
+                subtype          = detection.profile.subtype.value,
+                execution_mode   = detection.profile.execution.value,
+                nms_inside       = detection.profile.nms_inside,
+                state_optional   = detection.profile.state_optional,
+                model_profile_json = model_profile_json,
+                benchmark_caveats  = benchmark_caveats,
+                input_roles        = input_roles,
             )
 
-            # Registry transaction
             registry = LocalRegistry()
             try:
                 registry.save_build(build_obj)
             except Exception:
-                pass  # Duplicate build — already registered, artifact still valid
+                pass  # Duplicate build — artifact still valid
 
-            console.print(f"\n[bold green]✓ Build complete[/bold green]")
-            console.print(f"Build ID:      {build_id[:16]}...")
-            console.print(f"Artifact Hash: {artifact_hash[:16]}...")
-            console.print(f"Source Hash:   {source_hash[:16]}...")
-            console.print(f"Config Hash:   {config_hash[:16]}...")
-            console.print(f"Env Fingerprint: {env_fingerprint[:16]}...")
-            console.print(f"Size:          {size_mb:.2f} MB")
-            console.print(f"Artifact Path: {final_path}", overflow="fold")
-            console.print(f"Task:          {task_info.primary.value}")
-            console.print()
+            _print_success(
+                build_id, artifact_hash, source_hash, config_hash,
+                env_fingerprint, size_mb, final_path,
+                detection.profile, benchmark_caveats,
+            )
             return
 
         except MLBuildError as e:
@@ -335,203 +657,131 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
             sys.exit(1)
 
     # ============================================================
-    # ENFORCE DETERMINISM (DO NOT JUST WARN)
+    # CoreML path
     # ============================================================
     import numpy as np
     import torch
-    
-    # Set environment variables
+
     os.environ["PYTHONHASHSEED"] = "0"
-    
-    # Set random seeds
     torch.manual_seed(0)
     torch.cuda.manual_seed_all(0)
     np.random.seed(0)
-    
-    # Set deterministic algorithms (may impact performance)
     torch.use_deterministic_algorithms(True, warn_only=True)
 
     console.print("[dim]Deterministic mode enabled (PYTHONHASHSEED=0, seeds set)[/dim]\n")
-
     console.print(f"\n[bold]Building:[/bold] {os.path.basename(model)}")
     console.print(f"Target: {target}")
     console.print(f"Quantization: {quantize}\n")
 
     try:
-        # -------------------------------------------------------------
-        # Step 1: Collect environment ONCE (never recompute)
-        # -------------------------------------------------------------
-        env_data = collect_environment()
+        env_data        = collect_environment()
         env_fingerprint = hash_environment(env_data)
-        
-        # -------------------------------------------------------------
-        # Step 2: Validate reproducibility (WARN but allow non-critical)
-        # -------------------------------------------------------------
-        is_reproducible, warnings = validate_reproducibility()
-        if warnings:
+
+        is_reproducible, repro_warnings = validate_reproducibility()
+        if repro_warnings:
             console.print("\n[yellow]⚠️  Reproducibility warnings:[/yellow]")
-            for warning in warnings:
-                console.print(f"    {warning}")
-            
-            # Only check for CRITICAL warnings
-            has_critical = any("[CRITICAL]" in w for w in warnings)
-            if has_critical:
+            for w in repro_warnings:
+                console.print(f"    {w}")
+            if any("[CRITICAL]" in w for w in repro_warnings):
                 console.print("\n[bold red]CRITICAL: Build cannot proceed[/bold red]")
                 sys.exit(1)
-
             console.print("\n[bold yellow]WARNING: Build may not be reproducible[/bold yellow]")
-            console.print("Run: export PYTHONHASHSEED=0")
-            console.print("Or add to ~/.zshrc: echo 'export PYTHONHASHSEED=0' >> ~/.zshrc\n")
+            console.print("Run: export PYTHONHASHSEED=0\n")
 
-        # -------------------------------------------------------------
-        # Step 3: Load model
-        # -------------------------------------------------------------
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-            task_progress = p.add_task("Loading ONNX...", total=None)
+            tp = p.add_task("Loading ONNX...", total=None)
             ir = load_model(str(model))
-            p.update(task_progress, completed=True)
+            p.update(tp, completed=True)
 
-        # -------------------------------------------------------------
-        # Step 4: Hash source
-        # -------------------------------------------------------------
         source_hash = compute_source_hash(model)
 
-        # -------------------------------------------------------------
-        # Step 5: Build configuration
-        # -------------------------------------------------------------
         config = {
-            "target": target,
+            "target":       target,
             "quantization": {"type": quantize},
-            "optimizer": {"compute_units": "ALL"},
+            "optimizer":    {"compute_units": "ALL"},
         }
 
-        # Extract coremltools version from environment
         try:
             import coremltools as ct
             coremltools_version = ct.__version__
         except ImportError:
             coremltools_version = "unknown"
-        
+
         config_hash = compute_config_hash(config, coremltools_version=coremltools_version)
 
-        # -------------------------------------------------------------
-        # Step 5.5: Generate INT8 calibration data if needed
-        # -------------------------------------------------------------
+        # INT8 calibration
         calibration_data = None
         if quantize == "int8":
             console.print("[dim]Generating INT8 calibration data...[/dim]")
-            
-            # Get input shape from IR
             from ...backends.coreml.exporter import ModelIngestion
             _, _, shape_tuples = ModelIngestion.extract_input_specs(ir)
-            
-            # Create calibration config
             cal_config = CalibrationConfig(
-                sample_count=100,  # 100 calibration samples
-                input_shape=tuple(shape_tuples[0]),  # Use model's input shape
-                preprocessing=PreprocessingConfig(),  # No preprocessing for now
-                seed=42,
+                sample_count = 100,
+                input_shape  = tuple(shape_tuples[0]),
+                preprocessing = PreprocessingConfig(),
+                seed         = 42,
             )
-            
-            # Generate synthetic calibration data
-            cal_dataset = CalibrationDataset(cal_config)
+            cal_dataset         = CalibrationDataset(cal_config)
             calibration_samples = cal_dataset.generate_synthetic()
-            
-            # Compute fingerprint for reproducibility
-            cal_fingerprint = cal_dataset.compute_fingerprint()
-            
+            cal_fingerprint     = cal_dataset.compute_fingerprint()
             console.print(f"  Calibration samples: {cal_fingerprint.sample_count}")
-            console.print(f"  Calibration hash: {cal_fingerprint.data_hash[:16]}...")
-            console.print()
-            
+            console.print(f"  Calibration hash:    {cal_fingerprint.data_hash[:16]}...\n")
             calibration_data = list(calibration_samples)
 
-        # -------------------------------------------------------------
-        # Step 5.6: Task detection from ONNX graph (Tier 1/2/3)
-        # -------------------------------------------------------------
+        # Task detection (v2)
         import onnx as _onnx
         _onnx_model = _onnx.load(str(model))
-        task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
-        warn = detection_warning(task_result)
+        detection   = _detect_task_from_onnx(
+            _onnx_model,
+            forced_task     = task,
+            force_domain    = force_domain,
+            force_subtype   = force_subtype,
+            force_execution = force_execution,
+        )
+
+        warn = detection_warning(detection.result)
         if warn:
             console.print(f"[yellow]{warn}[/yellow]\n")
 
-        # -------------------------------------------------------------
-        # Step 6: Convert to CoreML
-        # -------------------------------------------------------------
+        # Convert
         with tempfile.TemporaryDirectory() as tmp_root:
-
             tmp_root = Path(tmp_root)
-
-            import io
-            import contextlib
+            import io, contextlib
 
             with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as p:
-                task_progress = p.add_task("Converting to CoreML...", total=None)
-
+                tp = p.add_task("Converting to CoreML...", total=None)
                 exporter = CoreMLExporter(target=target)
-                
-                # Suppress all noisy output from coremltools/onnx2torch during conversion
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    mlpackage_path, conversion_metadata = exporter.export(
+                    mlpackage_path, _ = exporter.export(
                         ir,
-                        output_dir=tmp_root,
-                        quantization=quantize,
-                        calibration_data=calibration_data,
+                        output_dir     = tmp_root,
+                        quantization   = quantize,
+                        calibration_data = calibration_data,
                     )
+                p.update(tp, completed=True)
 
-                p.update(task_progress, completed=True)
-
-            # ---------------------------------------------------------
-            # Step 7: Compute artifact hash
-            # ---------------------------------------------------------
             artifact_hash = compute_artifact_hash(mlpackage_path)
-
-            # ---------------------------------------------------------
-            # Step 8: Compute build ID (INCLUDES ENVIRONMENT)
-            # ---------------------------------------------------------
-            build_id = _structured_build_id(
-                source_hash,
-                config_hash,
-                artifact_hash,
-                env_fingerprint,
-                MLBUILD_VERSION,
+            build_id      = _structured_build_id(
+                source_hash, config_hash, artifact_hash,
+                env_fingerprint, MLBUILD_VERSION,
             )
 
-            # ---------------------------------------------------------
-            # Step 9: Prepare final artifact location
-            # ---------------------------------------------------------
             artifacts_root = Path(".mlbuild/artifacts").resolve()
-            final_dir = artifacts_root / artifact_hash
-
+            final_dir      = artifacts_root / artifact_hash
             artifacts_root.mkdir(parents=True, exist_ok=True)
 
-            # ---------------------------------------------------------
-            # Step 10: Promote artifact atomically
-            # ---------------------------------------------------------
             if final_dir.exists():
-                # Verify integrity before trusting existing artifact
                 existing_hash = compute_artifact_hash(final_dir)
                 if existing_hash != artifact_hash:
-                    raise RuntimeError(
-                        "Artifact hash mismatch — possible corruption"
-                    )
-
+                    raise RuntimeError("Artifact hash mismatch — possible corruption")
                 console.print(f"[yellow]Reusing existing artifact {artifact_hash[:12]}[/yellow]")
-
             else:
-                # Move entire directory atomically
                 shutil.move(str(mlpackage_path), str(final_dir))
-
-                # Post-move verification
                 verified_hash = compute_artifact_hash(final_dir)
                 if verified_hash != artifact_hash:
                     shutil.rmtree(final_dir, ignore_errors=True)
                     raise RuntimeError("Artifact integrity verification failed")
-                
-            # ---------------------------------------------------------
-            # Step 11: Store ONNX graph once for optimize command
-            # ---------------------------------------------------------
+
             graphs_root = Path(".mlbuild/graphs").resolve()
             graphs_root.mkdir(parents=True, exist_ok=True)
             graph_dest = graphs_root / f"{build_id}.onnx"
@@ -539,89 +789,76 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
                 shutil.copy2(str(model), str(graph_dest))
             graph_path = f"graphs/{build_id}.onnx"
 
-            # ---------------------------------------------------------
-            # Step 12: Compute exact byte size
-            # ---------------------------------------------------------
             size_bytes = _directory_size_bytes(final_dir)
-            size_mb = Decimal(size_bytes) / Decimal(1024 * 1024)
+            size_mb    = Decimal(size_bytes) / Decimal(1024 * 1024)
 
-            # ---------------------------------------------------------
-            # Step 13: Create Build object with environment data
-            # ---------------------------------------------------------
-            # Extract framework versions from env_data structure
-            backend_versions = {}
-            if "numpy" in env_data and env_data["numpy"].get("installed"):
-                backend_versions["numpy"] = env_data["numpy"]["version"]
-            if "torch" in env_data and env_data["torch"].get("installed"):
-                backend_versions["torch"] = env_data["torch"]["version"]
-            if "tensorflow" in env_data and env_data["tensorflow"].get("installed"):
-                backend_versions["tensorflow"] = env_data["tensorflow"]["version"]
-            if "onnxruntime" in env_data and env_data["onnxruntime"].get("installed"):
-                backend_versions["onnxruntime"] = env_data["onnxruntime"]["version"]
-            
-            # Add coremltools
+            backend_versions: dict = {}
+            for key, subkey in [("numpy", "numpy"), ("torch", "torch"),
+                                 ("tensorflow", "tensorflow"), ("onnxruntime", "onnxruntime")]:
+                if key in env_data and env_data[key].get("installed"):
+                    backend_versions[subkey] = env_data[key]["version"]
             try:
                 import coremltools as ct
                 backend_versions["coremltools"] = ct.__version__
             except ImportError:
                 backend_versions["coremltools"] = "unknown"
-            
-            # Add ONNX version from IR
             backend_versions["onnx"] = ir.metadata.get("framework_version", "unknown")
-            
+
+            # Build input roles and benchmark caveats (v2)
+            _, input_roles = build_input_schemas_with_roles(
+                detection.info, detection.result, detection.profile,
+            )
+            benchmark_caveats  = _build_benchmark_caveats(detection.profile)
+            model_profile_json = _profile_to_json(detection.profile)
+
             build_obj = Build(
-                build_id=build_id,
-                artifact_hash=artifact_hash,
-                source_hash=source_hash,
-                config_hash=config_hash,
-                env_fingerprint=env_fingerprint,
-                name=name,
-                notes=notes,
-                created_at=datetime.now(timezone.utc),
-                source_path=str(Path(model).resolve()),
-                target_device=target,
-                format="coreml",
-                quantization=config["quantization"],
-                optimizer_config=config["optimizer"],
-                backend_versions=backend_versions,  # Use extracted versions
-                environment_data=env_data,  # Full environment snapshot
-                mlbuild_version=MLBUILD_VERSION,
-                python_version=env_data["python"]["version"],
-                platform=env_data["hardware"]["cpu"]["system"],
-                os_version=env_data["hardware"]["cpu"]["release"],
-                artifact_path=str(final_dir),
-                size_mb=size_mb,
-                has_graph=True,
-                graph_format="onnx",
-                graph_path=graph_path,
-                task_type=task_result.primary.value,  # --- PATCH ---
+                build_id         = build_id,
+                artifact_hash    = artifact_hash,
+                source_hash      = source_hash,
+                config_hash      = config_hash,
+                env_fingerprint  = env_fingerprint,
+                name             = name,
+                notes            = notes,
+                created_at       = datetime.now(timezone.utc),
+                source_path      = str(Path(model).resolve()),
+                target_device    = target,
+                format           = "coreml",
+                quantization     = config["quantization"],
+                optimizer_config = config["optimizer"],
+                backend_versions = backend_versions,
+                environment_data = env_data,
+                mlbuild_version  = MLBUILD_VERSION,
+                python_version   = env_data["python"]["version"],
+                platform         = env_data["hardware"]["cpu"]["system"],
+                os_version       = env_data["hardware"]["cpu"]["release"],
+                artifact_path    = str(final_dir),
+                size_mb          = size_mb,
+                has_graph        = True,
+                graph_format     = "onnx",
+                graph_path       = graph_path,
+                task_type        = detection.profile.domain.value,
+                subtype          = detection.profile.subtype.value,
+                execution_mode   = detection.profile.execution.value,
+                nms_inside       = detection.profile.nms_inside,
+                state_optional   = detection.profile.state_optional,
+                model_profile_json = model_profile_json,
+                benchmark_caveats  = benchmark_caveats,
+                input_roles        = input_roles,
             )
 
-            # ---------------------------------------------------------
-            # Step 14: Registry transaction
-            # ---------------------------------------------------------
             registry = LocalRegistry()
             try:
                 registry.save_build(build_obj)
             except Exception:
-                # Roll back artifact if registry fails
                 shutil.rmtree(final_dir, ignore_errors=True)
                 raise
 
-        # -------------------------------------------------------------
-        # Success output
-        # -------------------------------------------------------------
-        console.print(f"\n[bold green]✓ Build complete[/bold green]")
-        console.print(f"Build ID:      {build_id[:16]}...")
-        console.print(f"Artifact Hash: {artifact_hash[:16]}...")
-        console.print(f"Source Hash:   {source_hash[:16]}...")
-        console.print(f"Config Hash:   {config_hash[:16]}...")
-        console.print(f"Env Fingerprint: {env_fingerprint[:16]}...")
-        console.print(f"Size:          {size_mb:.2f} MB")
-        console.print(f"Artifact Path: {final_dir}")
-        console.print(f"Task:          {task_result.primary.value}")
-        console.print()
-        
+        _print_success(
+            build_id, artifact_hash, source_hash, config_hash,
+            env_fingerprint, size_mb, final_dir,
+            detection.profile, benchmark_caveats,
+        )
+
         if not is_reproducible:
             console.print("[yellow]⚠️  Build may not be reproducible. See warnings above.[/yellow]\n")
 
@@ -629,90 +866,113 @@ def build(model: Path, backend: str, target: str, name: str, quantize: str, note
         console.print("\n[bold red]Build failed[/bold red]\n")
         console.print(e.format())
         sys.exit(e.exit_code.value)
-
     except Exception as e:
         console.print(f"\n[bold red]Build failed[/bold red]: {e}\n")
         import traceback
         traceback.print_exc()
         sys.exit(1)
 
+
+def _print_success(
+    build_id:          str,
+    artifact_hash:     str,
+    source_hash:       str,
+    config_hash:       str,
+    env_fingerprint:   str,
+    size_mb:           Decimal,
+    artifact_path:     Path,
+    profile:           ModelProfile,
+    benchmark_caveats: List[str],
+) -> None:
+    """Unified success output for both CoreML and TFLite builds."""
+    console.print(f"\n[bold green]✓ Build complete[/bold green]")
+    console.print(f"Build ID:      {build_id[:16]}...")
+    console.print(f"Artifact Hash: {artifact_hash[:16]}...")
+    console.print(f"Source Hash:   {source_hash[:16]}...")
+    console.print(f"Config Hash:   {config_hash[:16]}...")
+    console.print(f"Env:           {env_fingerprint[:16]}...")
+    console.print(f"Size:          {size_mb:.2f} MB")
+    console.print(f"Artifact:      {artifact_path}", overflow="fold")
+    console.print(f"Domain:        {profile.domain.value}")
+    console.print(f"Subtype:       {profile.subtype.value}")
+    console.print(f"Execution:     {profile.execution.value}")
+    console.print(f"Confidence:    {profile.confidence:.2f} ({profile.confidence_tier})")
+    if profile.nms_inside:
+        console.print(f"NMS:           inside graph")
+    if benchmark_caveats:
+        console.print(f"\n[dim]Benchmark caveats:[/dim]")
+        for caveat in benchmark_caveats:
+            console.print(f"  [dim]⚠  {caveat}[/dim]")
+    console.print()
+
+
 # ============================================================
-# Programmatic build API (used by explore and other commands)
+# Programmatic build API  (updated for Step 4)
 # ============================================================
 
 def run_build(
-    model_path: Path,
-    target: str,
-    name: str,
-    quantization: str = "fp32",
-    format: str = "coreml",
-    registry: Optional["LocalRegistry"] = None,
-    notes: Optional[str] = None,
-    task: Optional[str] = None,
+    model_path:      Path,
+    target:          str,
+    name:            str,
+    quantization:    str             = "fp32",
+    format:          str             = "coreml",
+    registry:        Optional["LocalRegistry"] = None,
+    notes:           Optional[str]   = None,
+    task:            Optional[str]   = None,
+    force_domain:    Optional[str]   = None,
+    force_subtype:   Optional[str]   = None,
+    force_execution: Optional[str]   = None,
 ) -> "Build":
     """
     Programmatic build API — no console output, no sys.exit.
-
     Returns the registered Build object.
     Used by: mlbuild explore, mlbuild optimize (future).
-    The Click `build` command remains independent with its own output.
     """
     from ...registry.local import LocalRegistry as _LocalRegistry
-    from decimal import Decimal
-    from datetime import datetime, timezone
 
     model_path = Path(model_path)
-    _registry = registry or _LocalRegistry()
+    _registry  = registry or _LocalRegistry()
+
+    kwargs = dict(
+        model_path      = model_path,
+        target          = target,
+        name            = name,
+        quantize        = quantization,
+        notes           = notes,
+        task            = task,
+        force_domain    = force_domain,
+        force_subtype   = force_subtype,
+        force_execution = force_execution,
+        registry        = _registry,
+    )
 
     if format == "coreml":
-        return _run_coreml_build(
-            model_path=model_path,
-            target=target,
-            name=name,
-            quantize=quantization,
-            notes=notes,
-            task=task,
-            registry=_registry,
-        )
+        return _run_coreml_build(**kwargs)
     elif format == "tflite":
-        return _run_tflite_build(
-            model_path=model_path,
-            target=target,
-            name=name,
-            quantize=quantization,
-            notes=notes,
-            task=task,
-            registry=_registry,
-        )
+        return _run_tflite_build(**kwargs)
     else:
         raise ValueError(f"Unsupported format: {format}")
 
 
 def _run_coreml_build(
-    model_path: Path,
-    target: str,
-    name: str,
-    quantize: str,
-    notes: Optional[str],
-    task: Optional[str],
-    registry: "LocalRegistry",
+    model_path:      Path,
+    target:          str,
+    name:            str,
+    quantize:        str,
+    notes:           Optional[str],
+    task:            Optional[str],
+    force_domain:    Optional[str],
+    force_subtype:   Optional[str],
+    force_execution: Optional[str],
+    registry:        "LocalRegistry",
 ) -> "Build":
-    import shutil
-    import tempfile
-    from decimal import Decimal
-    from datetime import datetime, timezone
+    import shutil, tempfile, io, contextlib
 
-    # Step 1: Environment
-    env_data = collect_environment()
+    env_data        = collect_environment()
     env_fingerprint = hash_environment(env_data)
+    ir              = load_model(str(model_path))
+    source_hash     = compute_source_hash(model_path)
 
-    # Step 2: Load model
-    ir = load_model(str(model_path))
-
-    # Step 3: Hash source
-    source_hash = compute_source_hash(model_path)
-
-    # Step 4: Config
     try:
         import coremltools as ct
         coremltools_version = ct.__version__
@@ -720,46 +980,41 @@ def _run_coreml_build(
         coremltools_version = "unknown"
 
     config = {
-        "target": target,
+        "target":       target,
         "quantization": {"type": quantize},
-        "optimizer": {"compute_units": "ALL"},
+        "optimizer":    {"compute_units": "ALL"},
     }
     config_hash = compute_config_hash(config, coremltools_version=coremltools_version)
 
-    # Step 5: Task detection
     import onnx as _onnx
     _onnx_model = _onnx.load(str(model_path))
-    task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
+    detection   = _detect_task_from_onnx(
+        _onnx_model,
+        forced_task     = task,
+        force_domain    = force_domain,
+        force_subtype   = force_subtype,
+        force_execution = force_execution,
+    )
 
-    # Step 6: Convert
     with tempfile.TemporaryDirectory() as tmp_root:
         tmp_root = Path(tmp_root)
-        import io, contextlib
         exporter = CoreMLExporter(target=target)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             mlpackage_path, _ = exporter.export(
-                ir,
-                output_dir=tmp_root,
-                quantization=quantize,
-                calibration_data=None,
+                ir, output_dir=tmp_root, quantization=quantize, calibration_data=None,
             )
 
-        # Step 7: Artifact hash + build ID
         artifact_hash = compute_artifact_hash(mlpackage_path)
-        build_id = _structured_build_id(
-            source_hash, config_hash, artifact_hash,
-            env_fingerprint, MLBUILD_VERSION,
+        build_id      = _structured_build_id(
+            source_hash, config_hash, artifact_hash, env_fingerprint, MLBUILD_VERSION,
         )
 
-        # Step 8: Promote artifact
         artifacts_root = Path(".mlbuild/artifacts").resolve()
-        final_dir = artifacts_root / artifact_hash
+        final_dir      = artifacts_root / artifact_hash
         artifacts_root.mkdir(parents=True, exist_ok=True)
-
         if not final_dir.exists():
             shutil.move(str(mlpackage_path), str(final_dir))
 
-        # Step 9: Store graph
         graphs_root = Path(".mlbuild/graphs").resolve()
         graphs_root.mkdir(parents=True, exist_ok=True)
         graph_dest = graphs_root / f"{build_id}.onnx"
@@ -767,12 +1022,9 @@ def _run_coreml_build(
             shutil.copy2(str(model_path), str(graph_dest))
         graph_path = f"graphs/{build_id}.onnx"
 
-        # Step 10: Size
-        size_bytes = _directory_size_bytes(final_dir)
-        size_mb = Decimal(size_bytes) / Decimal(1024 * 1024)
+        size_mb = Decimal(_directory_size_bytes(final_dir)) / Decimal(1024 * 1024)
 
-        # Step 11: Backend versions
-        backend_versions = {}
+        backend_versions: dict = {}
         try:
             import coremltools as ct
             backend_versions["coremltools"] = ct.__version__
@@ -780,131 +1032,149 @@ def _run_coreml_build(
             backend_versions["coremltools"] = "unknown"
         backend_versions["onnx"] = ir.metadata.get("framework_version", "unknown")
 
-        # Step 12: Build object
+        _, input_roles    = build_input_schemas_with_roles(detection.info, detection.result, detection.profile)
+        benchmark_caveats = _build_benchmark_caveats(detection.profile)
+
         build_obj = Build(
-            build_id=build_id,
-            artifact_hash=artifact_hash,
-            source_hash=source_hash,
-            config_hash=config_hash,
-            env_fingerprint=env_fingerprint,
-            name=name,
-            notes=notes,
-            created_at=datetime.now(timezone.utc),
-            source_path=str(model_path.resolve()),
-            target_device=target,
-            format="coreml",
-            quantization=config["quantization"],
-            optimizer_config=config["optimizer"],
-            backend_versions=backend_versions,
-            environment_data=env_data,
-            mlbuild_version=MLBUILD_VERSION,
-            python_version=env_data["python"]["version"],
-            platform=env_data["hardware"]["cpu"]["system"],
-            os_version=env_data["hardware"]["cpu"]["release"],
-            artifact_path=str(final_dir),
-            size_mb=size_mb,
-            has_graph=True,
-            graph_format="onnx",
-            graph_path=graph_path,
-            task_type=task_result.primary.value,
+            build_id          = build_id,
+            artifact_hash     = artifact_hash,
+            source_hash       = source_hash,
+            config_hash       = config_hash,
+            env_fingerprint   = env_fingerprint,
+            name              = name,
+            notes             = notes,
+            created_at        = datetime.now(timezone.utc),
+            source_path       = str(model_path.resolve()),
+            target_device     = target,
+            format            = "coreml",
+            quantization      = config["quantization"],
+            optimizer_config  = config["optimizer"],
+            backend_versions  = backend_versions,
+            environment_data  = env_data,
+            mlbuild_version   = MLBUILD_VERSION,
+            python_version    = env_data["python"]["version"],
+            platform          = env_data["hardware"]["cpu"]["system"],
+            os_version        = env_data["hardware"]["cpu"]["release"],
+            artifact_path     = str(final_dir),
+            size_mb           = size_mb,
+            has_graph         = True,
+            graph_format      = "onnx",
+            graph_path        = graph_path,
+            task_type         = detection.profile.domain.value,
+            subtype           = detection.profile.subtype.value,
+            execution_mode    = detection.profile.execution.value,
+            nms_inside        = detection.profile.nms_inside,
+            state_optional    = detection.profile.state_optional,
+            model_profile_json = _profile_to_json(detection.profile),
+            benchmark_caveats  = benchmark_caveats,
+            input_roles        = input_roles,
         )
 
-        # Step 13: Save
         try:
             registry.save_build(build_obj)
         except Exception:
-            pass  # Duplicate — artifact still valid
+            pass
 
     return build_obj
 
 
 def _run_tflite_build(
-    model_path: Path,
-    target: str,
-    name: str,
-    quantize: str,
-    notes: Optional[str],
-    task: Optional[str],
-    registry: "LocalRegistry",
+    model_path:      Path,
+    target:          str,
+    name:            str,
+    quantize:        str,
+    notes:           Optional[str],
+    task:            Optional[str],
+    force_domain:    Optional[str],
+    force_subtype:   Optional[str],
+    force_execution: Optional[str],
+    registry:        "LocalRegistry",
 ) -> "Build":
     import shutil
-    from decimal import Decimal
-    from datetime import datetime, timezone
     from ...backends.registry import BackendRegistry
 
-    env_data = collect_environment()
+    env_data        = collect_environment()
     env_fingerprint = hash_environment(env_data)
-    source_hash = compute_source_hash(model_path)
+    source_hash     = compute_source_hash(model_path)
 
     config = {
-        "target": target,
+        "target":       target,
         "quantization": {"type": quantize},
-        "optimizer": {},
+        "optimizer":    {},
     }
-    config_hash = compute_config_hash(config)
-
+    config_hash  = compute_config_hash(config)
     backend_inst = BackendRegistry.get_backend("tflite")
-    tflite_path = backend_inst._export(
-        model_path=model_path,
-        quantize=quantize,
-        name=name,
-        representative_dataset=None,
+    tflite_path  = backend_inst._export(
+        model_path=model_path, quantize=quantize, name=name, representative_dataset=None,
     )
 
-    artifact_hash = compute_source_hash(tflite_path)
-    build_id = _structured_build_id(
-        source_hash, config_hash, artifact_hash,
-        env_fingerprint, MLBUILD_VERSION,
+    artifact_hash  = compute_source_hash(tflite_path)
+    build_id       = _structured_build_id(
+        source_hash, config_hash, artifact_hash, env_fingerprint, MLBUILD_VERSION,
     )
 
     artifacts_root = Path(".mlbuild/artifacts").resolve()
-    final_path = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
+    final_path     = artifacts_root / f"{artifact_hash[:16]}_{name or tflite_path.stem}.tflite"
     artifacts_root.mkdir(parents=True, exist_ok=True)
-
     if not final_path.exists():
         shutil.copy2(str(tflite_path), str(final_path))
 
     graphs_root = Path(".mlbuild/graphs").resolve()
     graphs_root.mkdir(parents=True, exist_ok=True)
-    graph_dest = graphs_root / f"{build_id}.onnx"
+    graph_dest  = graphs_root / f"{build_id}.onnx"
     if not graph_dest.exists():
         shutil.copy2(str(model_path), str(graph_dest))
-
     graph_path = f"graphs/{build_id}.onnx"
-    size_mb = Decimal(str(round(final_path.stat().st_size / (1024 * 1024), 6)))
 
+    size_mb          = Decimal(str(round(final_path.stat().st_size / (1024 * 1024), 6)))
     backend_versions = {"tflite": backend_inst._tf_version()}
 
     import onnx as _onnx
     _onnx_model = _onnx.load(str(model_path))
-    task_result = _detect_task_from_onnx(_onnx_model, forced_task=task)
+    detection   = _detect_task_from_onnx(
+        _onnx_model,
+        forced_task     = task,
+        force_domain    = force_domain,
+        force_subtype   = force_subtype,
+        force_execution = force_execution,
+    )
+
+    _, input_roles    = build_input_schemas_with_roles(detection.info, detection.result, detection.profile)
+    benchmark_caveats = _build_benchmark_caveats(detection.profile)
 
     build_obj = Build(
-        build_id=build_id,
-        artifact_hash=artifact_hash,
-        source_hash=source_hash,
-        config_hash=config_hash,
-        env_fingerprint=env_fingerprint,
-        name=name,
-        notes=notes,
-        created_at=datetime.now(timezone.utc),
-        source_path=str(model_path.resolve()),
-        target_device=target,
-        format="tflite",
-        quantization=config["quantization"],
-        optimizer_config=config["optimizer"],
-        backend_versions=backend_versions,
-        environment_data=env_data,
-        mlbuild_version=MLBUILD_VERSION,
-        python_version=env_data["python"]["version"],
-        platform=env_data["hardware"]["cpu"]["system"],
-        os_version=env_data["hardware"]["cpu"]["release"],
-        artifact_path=str(final_path),
-        size_mb=size_mb,
-        has_graph=True,
-        graph_format="onnx",
-        graph_path=graph_path,
-        task_type=task_result.primary.value,
+        build_id          = build_id,
+        artifact_hash     = artifact_hash,
+        source_hash       = source_hash,
+        config_hash       = config_hash,
+        env_fingerprint   = env_fingerprint,
+        name              = name,
+        notes             = notes,
+        created_at        = datetime.now(timezone.utc),
+        source_path       = str(model_path.resolve()),
+        target_device     = target,
+        format            = "tflite",
+        quantization      = config["quantization"],
+        optimizer_config  = config["optimizer"],
+        backend_versions  = backend_versions,
+        environment_data  = env_data,
+        mlbuild_version   = MLBUILD_VERSION,
+        python_version    = env_data["python"]["version"],
+        platform          = env_data["hardware"]["cpu"]["system"],
+        os_version        = env_data["hardware"]["cpu"]["release"],
+        artifact_path     = str(final_path),
+        size_mb           = size_mb,
+        has_graph         = True,
+        graph_format      = "onnx",
+        graph_path        = graph_path,
+        task_type         = detection.profile.domain.value,
+        subtype           = detection.profile.subtype.value,
+        execution_mode    = detection.profile.execution.value,
+        nms_inside        = detection.profile.nms_inside,
+        state_optional    = detection.profile.state_optional,
+        model_profile_json = _profile_to_json(detection.profile),
+        benchmark_caveats  = benchmark_caveats,
+        input_roles        = input_roles,
     )
 
     try:
@@ -913,61 +1183,3 @@ def _run_tflite_build(
         pass
 
     return build_obj
-
-# ---------------------------------------------------------------------
-# Shared helper: build ModelInfo + call detect_task
-# ---------------------------------------------------------------------
-
-def _detect_task_from_onnx(onnx_model, forced_task: str | None):
-    """
-    Build a ModelInfo from a loaded ONNX model and run task detection.
-    """
-    from ...core.task_detection import TensorInfo
-    import numpy as np
-
-    graph = onnx_model.graph
-
-    # Build TensorInfo list from ONNX graph inputs
-    inputs = []
-    for inp in graph.input:
-        shape = []
-        for dim in inp.type.tensor_type.shape.dim:
-            shape.append(dim.dim_value if dim.dim_value > 0 else -1)
-        
-        # Map ONNX elem_type to numpy dtype
-        elem_type = inp.type.tensor_type.elem_type
-        _ONNX_TO_NP = {
-            1: np.float32, 2: np.uint8, 3: np.int8,
-            5: np.int32,   6: np.int32, 7: np.int64,
-            10: np.float16, 11: np.float64,
-        }
-        dtype = _ONNX_TO_NP.get(elem_type)
-
-        inputs.append(TensorInfo(
-            name=inp.name,
-            shape=tuple(shape) if shape else None,
-            dtype=dtype,
-        ))
-
-    # Build TensorInfo list from ONNX graph outputs
-    outputs = []
-    for out in graph.output:
-        outputs.append(TensorInfo(name=out.name))
-
-    op_types = {node.op_type for node in graph.node}
-
-    metadata = {}
-    for prop in onnx_model.metadata_props:
-        metadata[prop.key] = prop.value
-
-    info = ModelInfo(
-        format="onnx",
-        inputs=inputs,
-        outputs=outputs,
-        op_types=op_types,
-        node_count=len(graph.node),
-        metadata=metadata,
-    )
-
-    forced = TaskType(forced_task) if forced_task else None
-    return detect_task(info, forced=forced)

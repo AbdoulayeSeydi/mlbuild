@@ -32,7 +32,7 @@ v6 changes:
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -518,6 +518,20 @@ WHERE id = 1;
 """
 
 # ============================================================
+# Migration: v9 → v10
+# ============================================================
+
+MIGRATION_V9_TO_V10 = """
+ALTER TABLE builds ADD COLUMN subtype         TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE builds ADD COLUMN execution_mode  TEXT NOT NULL DEFAULT 'standard';
+ALTER TABLE builds ADD COLUMN nms_inside      INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE builds ADD COLUMN state_optional  INTEGER NOT NULL DEFAULT 0;
+
+UPDATE schema_version SET version = 10, applied_at = datetime('now')
+WHERE id = 1;
+"""
+
+# ============================================================
 # Migration registry — ordered list of all migrations
 # ============================================================
 
@@ -526,7 +540,8 @@ MIGRATIONS: list[tuple[int, int, str]] = [
     (5, 6, MIGRATION_V5_TO_V6),
     (6, 7, MIGRATION_V6_TO_V7),
     (7, 8, MIGRATION_V7_TO_V8),
-    (8, 9, MIGRATION_V8_TO_V9), 
+    (8, 9, MIGRATION_V8_TO_V9),
+    (9, 10, MIGRATION_V9_TO_V10),
 ]
 
 

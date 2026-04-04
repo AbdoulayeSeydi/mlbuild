@@ -301,12 +301,14 @@ class LocalRegistry:
                         weight_precision, activation_precision,
                         has_graph, graph_format, graph_path,
                         cached_latency_p50_ms, cached_latency_p95_ms,
-                        cached_memory_peak_mb
+                        cached_memory_peak_mb,
+                        subtype, execution_mode, nms_inside, state_optional
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?
                     )
                     """,
                     values,
