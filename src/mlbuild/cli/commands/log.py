@@ -191,6 +191,12 @@ def _print_tree(builds: list, console: Console) -> None:
     help='Filter builds by task type.',
 )
 @click.option(
+    '--subtype',
+    default=None,
+    type=click.Choice(['detection', 'timeseries', 'recommendation', 'generative_stateful', 'multimodal', 'none']),
+    help='Filter builds by behavioral subtype (e.g. detection, timeseries).',
+)
+@click.option(
     '--format', 'fmt',
     default=None,
     type=click.Choice(['coreml', 'tflite']),
@@ -229,6 +235,7 @@ def log(
     date_from: Optional[str],
     date_to: Optional[str],
     task: Optional[str],
+    subtype: Optional[str],
     fmt: Optional[str],
     roots_only: bool,
     source: Optional[str],
@@ -358,6 +365,8 @@ def log(
         # Client-side filters
         if task:
             builds = [b for b in builds if display_task(b) == task]
+        if subtype:
+            builds = [b for b in builds if getattr(b, 'subtype', 'none') == subtype]
         if fmt:
             builds = [b for b in builds if b.format == fmt]
         if roots_only:

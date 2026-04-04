@@ -457,6 +457,7 @@ class LocalRegistry:
         include_deleted: bool = False,
         date_from: str | None = None,
         date_to: str | None = None,
+        subtype: str | None = None,
         order_by: tuple = ("created_at DESC", "build_id ASC"),
     ) -> List[Build]:
         """List builds with advanced filtering and pagination."""
@@ -494,6 +495,10 @@ class LocalRegistry:
             if date_to:
                 where_clauses.append("created_at <= ?")
                 params.append(date_to)
+
+            if subtype:
+                where_clauses.append("subtype = ?")
+                params.append(subtype)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
             order_sql = ", ".join(order_by)
@@ -1493,4 +1498,8 @@ class LocalRegistry:
             cached_latency_p50_ms=safe_get(row, "cached_latency_p50_ms"),
             cached_latency_p95_ms=safe_get(row, "cached_latency_p95_ms"),
             cached_memory_peak_mb=safe_get(row, "cached_memory_peak_mb"),
+            subtype=safe_get(row, "subtype", "none"),
+            execution_mode=safe_get(row, "execution_mode", "standard"),
+            nms_inside=bool(safe_get(row, "nms_inside", 0)),
+            state_optional=bool(safe_get(row, "state_optional", 0)),
         )

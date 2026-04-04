@@ -237,6 +237,9 @@ def build(model, backend, target, name, quantize, notes):
 @click.option('--date-to', default=None)
 @click.option('--task', default=None,
               type=click.Choice(['vision', 'nlp', 'audio', 'multimodal', 'unknown']))
+@click.option('--subtype', default=None,
+              type=click.Choice(['detection', 'timeseries', 'recommendation', 'generative_stateful', 'multimodal', 'none']),
+              help='Filter builds by behavioral subtype.')
 @click.option('--format', 'fmt', default=None,
               type=click.Choice(['coreml', 'tflite']))
 @click.option('--roots-only', is_flag=True, default=False)
@@ -244,7 +247,7 @@ def build(model, backend, target, name, quantize, notes):
 @click.option('--tree', is_flag=True, default=False)
 def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes,
         full_id, full_hashes, target, name, tag, date_from, date_to, task,
-        fmt, roots_only, source, tree):
+        subtype, fmt, roots_only, source, tree):
     """Show build history."""
     from .commands.log import log as log_cmd
     ctx = click.get_current_context()
@@ -265,6 +268,7 @@ def log(build_id, limit, offset, as_json, csv_path, show_hashes, show_notes,
         date_from=date_from,
         date_to=date_to,
         task=task,
+        subtype=subtype,
         fmt=fmt,
         roots_only=roots_only,
         source=source,
