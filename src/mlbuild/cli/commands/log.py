@@ -476,6 +476,7 @@ def log(
         table.add_column("Method", style="cyan", no_wrap=True)
         table.add_column("Target", style="yellow", no_wrap=True)
         table.add_column("Task", style="magenta", no_wrap=True)
+        table.add_column("Subtype", style="magenta", no_wrap=True)
         table.add_column("Size", justify="right", no_wrap=True)
         table.add_column("p50 Latency", justify="right", no_wrap=True)
         if show_machine:
@@ -505,6 +506,7 @@ def log(
                 method,
                 data["target_device"],
                 display_task(b),
+                getattr(b, "subtype", "none") or "none",
                 humanize_bytes(data["size_bytes"]),
                 latency_str,
             ]
