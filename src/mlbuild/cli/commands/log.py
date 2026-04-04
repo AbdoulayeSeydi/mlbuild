@@ -389,6 +389,8 @@ def log(
                 data["created_at"] = format_iso8601(data["created_at"])
                 data["imported"] = is_imported(b)
                 data["task"] = display_task(b)
+                data["subtype"] = getattr(b, "subtype", "none") or "none"
+                data["execution_mode"] = getattr(b, "execution_mode", "standard") or "standard"
                 data["optimization_method"] = getattr(b, "optimization_method", None)
                 data["cached_latency_p50_ms"] = getattr(b, "cached_latency_p50_ms", None)
                 output.append(data)

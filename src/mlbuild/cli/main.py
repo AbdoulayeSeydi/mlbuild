@@ -174,50 +174,58 @@ _EXCLUDED_FROM_HISTORY = frozenset({
 
 # Lazy-load commands to prevent import errors from breaking the CLI
 @cli.command()
-@click.option(
-    "--model",
-    required=True,
-    type=click.Path(exists=True),
-)
+@click.option("--model", required=True, type=click.Path(exists=True))
 @click.option(
     "--backend",
     default="coreml",
-    type=click.Choice(["coreml", "tflite"]), 
-    help="Backend to use for conversion"
+    type=click.Choice(["coreml", "tflite"]),
+    help=(
+        "Backend to use for conversion. "
+        "NOTE: MLBuild only converts ONNX → CoreML or ONNX → TFLite. "
+        "CoreML and TFLite models must be registered with 'mlbuild import', not converted. "
+        "To convert between CoreML and TFLite, first export your model to ONNX."
+    ),
 )
 @click.option(
     "--target",
     required=True,
     type=click.Choice([
-        # Apple
         "apple_a18", "apple_a17", "apple_a16", "apple_a15",
         "apple_m3", "apple_m2", "apple_m1",
-        # Android
         "android_arm64", "android_arm32", "android_x86",
-        # Edge
         "raspberry_pi", "coral_tpu", "generic_linux",
-    ]),  
+    ]),
 )
 @click.option("--name")
-@click.option(
-    "--quantize",
-    type=click.Choice(["fp32", "fp16", "int8"]),
-    default="fp32",
-)
+@click.option("--quantize", type=click.Choice(["fp32", "fp16", "int8"]), default="fp32")
 @click.option("--notes")
-def build(model, backend, target, name, quantize, notes):
-    """Build model using specified backend."""
+@click.option("--force-domain", "force_domain",
+              type=click.Choice(["vision", "nlp", "audio", "tabular"]),
+              default=None,
+              help="Override auto-detected domain.")
+@click.option("--force-subtype", "force_subtype",
+              type=click.Choice(["detection", "segmentation", "timeseries",
+                                 "recommendation", "generative", "multimodal", "none"]),
+              default=None,
+              help="Override auto-detected behavioral subtype.")
+@click.option("--force-execution", "force_execution",
+              type=click.Choice(["standard", "stateful", "partially_stateful",
+                                 "kv_cache", "multi_input"]),
+              default=None,
+              help="Override auto-detected execution mode.")
+def build(model, backend, target, name, quantize, notes,
+          force_domain, force_subtype, force_execution):
+    """Convert ONNX model to CoreML or TFLite and register the artifact.
+
+    MLBuild only converts ONNX → CoreML or ONNX → TFLite.
+    CoreML/TFLite models must be registered with 'mlbuild import'.
+    """
     from .commands.build import build as build_cmd
-    from ..backends.registry import BackendRegistry
-
-    try:
-        backend_inst = BackendRegistry.get_backend(backend)
-    except (ValueError, RuntimeError) as e:
-        console.print(f"\n[red]Backend Error:[/red] {e}\n")
-        sys.exit(1)
-
     ctx = click.get_current_context()
-    ctx.invoke(build_cmd, model=model, backend=backend, target=target, name=name, quantize=quantize, notes=notes)
+    ctx.invoke(build_cmd, model=model, backend=backend, target=target,
+               name=name, quantize=quantize, notes=notes,
+               force_domain=force_domain, force_subtype=force_subtype,
+               force_execution=force_execution)
 
 
 @cli.command()
