@@ -8,6 +8,32 @@ Design principles:
 - Input normalization
 - Extensible to new formats/backends
 - Deterministic API outputs
+
+# ================================================================
+# Format × Target × Device Compatibility Matrix
+#
+# Format      Target              Device Connected     Result
+# ----------------------------------------------------------------
+# tflite      device-connected    Android (USB)        ✓ ADB pipeline
+# tflite      device-connected    Android emulator     ✓ ADB + emulator warning
+# tflite      device-connected    iOS connected        ✗ format mismatch at benchmark
+# tflite      device-connected    no device            ✗ no device error
+# tflite      android_arm64       any (Mac host)       ✓ local TFLite runner
+# tflite      android_arm32       any (Mac host)       ✓ local TFLite runner
+# tflite      raspberry_pi        any (Mac host)       ✓ local TFLite runner
+# ----------------------------------------------------------------
+# coreml      device-connected    Android connected    ✗ device mismatch at build
+# coreml      device-connected    Android connected    ✗ format mismatch at benchmark
+# coreml      device-connected    iOS (IDB)            ✓ IDB pipeline (Phase 2)
+# coreml      device-connected    no device            ✓ builds with apple_a17 default + warning
+# coreml      apple_m1/m2/m3      Mac host             ✓ local CoreML runner
+# coreml      apple_a15-a18       Mac host             ✓ local CoreML runner
+# ----------------------------------------------------------------
+# onnx        onnxruntime_cpu     any                  ✓ local ONNX Runtime
+# onnx        onnxruntime_gpu     any                  ✓ local ONNX Runtime
+# onnx        onnxruntime_ane     macOS only           ✓ local ONNX Runtime
+# ================================================================
+
 """
 
 from __future__ import annotations

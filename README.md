@@ -1365,6 +1365,29 @@ mlbuild benchmark <build-id>
 
 Emulator runs are detected automatically and flagged with a warning — latency numbers from emulators are not representative of real hardware.
 
+### Format × Device Compatibility Matrix
+
+| Format | Target | Device Connected | Result |
+|--------|--------|-----------------|--------|
+| TFLite | `device-connected` | Android (USB-C) | ✓ Benchmarks via ADB |
+| TFLite | `device-connected` | Android emulator | ✓ Works with emulator warning |
+| TFLite | `device-connected` | iOS connected | ✗ Format mismatch — clear error |
+| TFLite | `device-connected` | No device | ✗ No device error |
+| TFLite | `android_arm64` | Mac host | ✓ Local TFLite runner |
+| TFLite | `android_arm32` | Mac host | ✓ Local TFLite runner |
+| TFLite | `raspberry_pi` | Mac host | ✓ Local TFLite runner |
+| CoreML | `device-connected` | Android connected | ✗ Device mismatch at build time |
+| CoreML | `device-connected` | Android connected | ✗ Format mismatch at benchmark |
+| CoreML | `device-connected` | iPhone via IDB | ✓ IDB pipeline (Phase 2) |
+| CoreML | `device-connected` | No device | ✓ Builds with `apple_a17` default + warning |
+| CoreML | `apple_m1/m2/m3` | Mac host | ✓ Local CoreML runner |
+| CoreML | `apple_a15`–`a18` | Mac host | ✓ Local CoreML runner |
+| ONNX | `onnxruntime_cpu` | Any | ✓ Local ONNX Runtime |
+| ONNX | `onnxruntime_gpu` | Any | ✓ Local ONNX Runtime |
+| ONNX | `onnxruntime_ane` | macOS only | ✓ Local ONNX Runtime |
+
+**Import is always device-agnostic** — format/device compatibility is enforced at benchmark time only.
+
 ### Optimization
 - **FP16 quantization** — recompilation from ONNX graph
 - **Dynamic range INT8** — weight-only, no calibration data needed
