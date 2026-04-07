@@ -147,7 +147,7 @@ def list_experiments(
             sys.exit(EXIT_SUCCESS)
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Name", style="green", overflow="fold", no_wrap=True)
+        table.add_column("Name", style="green", no_wrap=True, overflow="ellipsis")
         table.add_column("ID", style="dim", no_wrap=True)
         table.add_column("Created", style="dim", no_wrap=True)
         table.add_column("Deleted", style="red", no_wrap=True)

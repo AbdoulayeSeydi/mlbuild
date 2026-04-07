@@ -200,9 +200,9 @@ def baseline_history(limit: int):
     console.print(f"\n[bold]Baseline History[/bold]\n")
 
     table = Table(show_header=True, header_style="bold")
-    table.add_column("Tag",      style="green", no_wrap=True)
+    table.add_column("Tag",      style="green", no_wrap=True, overflow="ellipsis")
     table.add_column("Build ID", style="cyan", no_wrap=True)
-    table.add_column("Name", no_wrap=True)
+    table.add_column("Name", no_wrap=True, overflow="ellipsis")
     table.add_column("Format",   style="blue", no_wrap=True)
     table.add_column("Target",   style="yellow", no_wrap=True)
     table.add_column("p50",      justify="right", no_wrap=True)

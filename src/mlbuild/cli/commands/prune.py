@@ -92,7 +92,7 @@ def prune(keep_last, older_than, purge, dry_run, force, tag):
 
         table = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
         table.add_column("ID",     style="bold", min_width=10, no_wrap=True)
-        table.add_column("Name",   min_width=18, no_wrap=True)
+        table.add_column("Name",   min_width=18, no_wrap=True, overflow="ellipsis")
         table.add_column("Format", min_width=10, no_wrap=True)
         table.add_column("Size",   min_width=10, justify="right", no_wrap=True)
         table.add_column("Age",    min_width=12, no_wrap=True)

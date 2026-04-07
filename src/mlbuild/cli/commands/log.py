@@ -471,7 +471,7 @@ def log(
         )
 
         table.add_column("Build ID", style="cyan", no_wrap=True)
-        table.add_column("Name", style="green", no_wrap=True)
+        table.add_column("Name", style="green", no_wrap=True, overflow="ellipsis")
         table.add_column("Format", style="blue", no_wrap=True)
         table.add_column("Method", style="cyan", no_wrap=True)
         table.add_column("Target", style="yellow", no_wrap=True)

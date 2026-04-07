@@ -94,6 +94,42 @@ def benchmark(build_id: str, runs: int, warmup: int, compute_unit: str, as_json:
         if not artifact_path.exists():
             console.print(f"[red]Artifact not found: {artifact_path}[/red]")
             raise click.Abort()
+        
+        # If artifact_path is a directory, find the actual model file inside
+        if artifact_path.is_dir():
+            # Check if the directory itself is an mlpackage
+            if (artifact_path / "Manifest.json").exists():
+                pass  # artifact_path is already the mlpackage — use it directly
+            elif build.format == "tflite":
+                candidates = list(artifact_path.glob("*.tflite"))
+                if not candidates:
+                    console.print(f"[red]No .tflite file found in artifact directory: {artifact_path}[/red]")
+                    raise click.Abort()
+                artifact_path = candidates[0]
+            elif build.format == "coreml":
+                candidates = list(artifact_path.glob("*.mlpackage")) or list(artifact_path.glob("*.mlmodel"))
+                if not candidates:
+                    console.print(f"[red]No model file found in artifact directory: {artifact_path}[/red]")
+                    raise click.Abort()
+                artifact_path = candidates[0]
+            else:
+                console.print(f"[red]No model file found in artifact directory: {artifact_path}[/red]")
+                raise click.Abort()
+            
+        
+        # --- device-connected routing ---
+        if "device-connected" in (build.target_device or ""):
+            _run_device_connected_benchmark(
+                build         = build,
+                build_abi     = getattr(build, "device_abi", None),
+                device_name   = getattr(build, "device_name", None),
+                artifact_path = artifact_path,
+                runs          = runs,
+                warmup        = warmup,
+                as_json       = as_json,
+                registry      = registry,
+            )
+            return
 
         # --- PATCH: resolve task (flag → registry → unknown) ---
         if task:
@@ -499,3 +535,244 @@ def _print_nlp_results(rows, json_buckets, build, as_json, strict_cfg, validator
     console.print(table)
     console.print()
     console.print("[green]✓ Benchmark saved to registry[/green]\n")
+
+def _run_device_connected_benchmark(
+    build,
+    build_abi:    str | None,
+    device_name:  str | None,
+    artifact_path,
+    runs:         int,
+    warmup:       int,
+    as_json:      bool,
+    registry,
+) -> None:
+    """
+    Route a device-connected build to the ADB pipeline.
+    Blocks on ABI mismatch before deploying anything.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        from ...platforms.android.device import ADBDevice, BenchmarkConfig
+        from ...platforms.android.introspect import build_profile as _build_profile
+        from ...core.errors import (
+            ADBNotFoundError, ADBNoDeviceError,
+            ADBUnauthorizedError, ADBOfflineError,
+            ADBMultipleDevicesError,
+        )
+    except ImportError as exc:
+        console.print(f"\n[red]Import error:[/red] {exc}\n")
+        sys.exit(1)
+
+    if not as_json:
+        console.print(f"\n[bold]Benchmarking:[/bold] {build.name or build.build_id[:16]}")
+        console.print(f"Format:  {build.format}")
+        console.print(f"Target:  {device_name or build.target_device}")
+        console.print(f"Built for ABI: {build_abi or 'unknown'}")
+        console.print()
+        console.print("[dim]Detecting connected Android device...[/dim]")
+
+    # --- Connect ---
+    try:
+        device = ADBDevice.connect()
+    except ADBNotFoundError as exc:
+        console.print(f"\n[red]ADB not found.[/red] {exc.message}\n")
+        sys.exit(1)
+    except ADBNoDeviceError:
+        console.print(
+            f"\n[red]No Android device connected.[/red]\n"
+            f"Connect a device via USB-C and enable USB debugging.\n"
+        )
+        sys.exit(1)
+    except ADBUnauthorizedError:
+        console.print(
+            f"\n[red]Device not authorized.[/red]\n"
+            f"Accept the USB debugging prompt on your phone.\n"
+        )
+        sys.exit(1)
+    except ADBOfflineError:
+        console.print(
+            f"\n[red]Device offline.[/red]\n"
+            f"Try unplugging and reconnecting.\n"
+        )
+        sys.exit(1)
+    except ADBMultipleDevicesError as exc:
+        console.print(f"\n[red]Multiple devices found.[/red] {exc.message}\n")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"\n[red]Connection failed:[/red] {exc}\n")
+        sys.exit(1)
+
+    connected_abi  = device.profile.primary_abi
+    connected_name = f"{device.profile.manufacturer} {device.profile.model}"
+
+    if not as_json:
+        console.print(
+            f"  Connected: [bold]{connected_name}[/bold]  "
+            f"API {device.profile.api_level}  {connected_abi}\n"
+        )
+        if device.profile.is_emulator:
+            console.print(
+                "[yellow]⚠  Emulator detected[/yellow] — "
+                "latency numbers will not reflect real device performance.\n"
+            )
+
+    # --- ABI check ---
+    if build_abi and build_abi != connected_abi:
+        console.print(
+            f"\n[red]ABI mismatch.[/red]\n\n"
+            f"  Build ABI:     [yellow]{build_abi}[/yellow]  "
+            f"(built on {device_name or 'unknown device'})\n"
+            f"  Connected ABI: [yellow]{connected_abi}[/yellow]  "
+            f"({connected_name})\n\n"
+            f"Rebuild with this device connected:\n"
+            f"  [dim]mlbuild build --model <model.onnx> --target device-connected[/dim]\n"
+        )
+        sys.exit(1)
+
+    # Derive platform from connected device --- Platform / format compatibility check
+    device_profile = device.profile
+    connected_platform = "ios" if device_profile.is_ios else "android"
+
+    # Format + platform compatibility check
+    if connected_platform == "android" and build.format == "coreml":
+        console.print(
+            f"\n[red]Format mismatch.[/red]\n"
+            f"Connected device is Android ({connected_name}) but model format is CoreML.\n"
+            f"CoreML only runs on Apple devices.\n"
+            f"[dim]Convert to TFLite first:\n"
+            f"  mlbuild build --model model.onnx --target device-connected --backend tflite[/dim]\n"
+        )
+        raise click.Abort()
+
+    if connected_platform == "ios" and build.format == "tflite":
+        console.print(
+            f"\n[red]Format mismatch.[/red]\n"
+            f"Connected device is iOS ({connected_name}) but model format is TFLite.\n"
+            f"[dim]Convert to CoreML first:\n"
+            f"  mlbuild build --model model.onnx --target device-connected --backend coreml[/dim]\n"
+        )
+        raise click.Abort()
+
+    # --- Run ---
+    config = BenchmarkConfig(
+        model_path  = artifact_path,
+        num_runs    = runs,
+        warmup_runs = warmup,
+    )
+
+    try:
+        result = device.run(config)
+    except Exception as exc:
+        console.print(f"\n[red]Benchmark failed:[/red] {exc}\n")
+        sys.exit(1)
+
+    if result.error:
+        console.print(f"\n[red]Run failed:[/red] {result.error}\n")
+        sys.exit(1)
+
+    view = result.view
+
+    # --- Save to registry benchmarks table ---
+    from ...core.types import Benchmark
+    bench = Benchmark(
+        build_id         = build.build_id,
+        device_chip      = f"{connected_name} ({connected_abi})",
+        runtime          = "tflite",
+        measurement_type = "latency",
+        compute_unit     = "CPU",
+        latency_p50_ms   = view.cpu_p50_ms,
+        latency_p95_ms   = view.cpu_p90_ms,
+        latency_p99_ms   = view.cpu_p99_ms,
+        memory_peak_mb   = view.cpu_peak_mem_mb,
+        num_runs         = runs,
+        measured_at      = datetime.now(timezone.utc),
+    )
+    registry.save_benchmark(bench)
+
+    # --- Store device name in ctx for command_log ---
+    try:
+        import click as _click
+        ctx = _click.get_current_context()
+        ctx.obj["_android_device"] = (
+            f"{connected_name} — {connected_abi} (device-connected)"
+        )
+        ctx.obj["_linked_build_id"] = build.build_id
+    except Exception:
+        pass
+
+    # --- Display ---
+    if as_json:
+        import json as _json
+        print(_json.dumps(result.registry_dict, indent=2, default=str))
+        return
+
+    table = Table(title="Benchmark Results")
+    table.add_column("Metric", style="cyan", no_wrap=True)
+    table.add_column("Value",  justify="right", style="green", no_wrap=True)
+
+    def _f(v):  return f"{v:.3f} ms" if v is not None else "—"
+    def _fm(v): return f"{v:.2f} MB" if v is not None else "—"
+    def _fv(v): return f"{v:.4f}"    if v is not None else "—"
+    def _fi(v): return str(v)        if v is not None else "—"
+
+    # Thermal drift from pre/post temperature delta
+    thermal_drift_str = "—"
+    if view.thermal_pre and view.thermal_post:
+        pre_temp  = view.thermal_pre.battery_temp_c
+        post_temp = view.thermal_post.battery_temp_c
+        if pre_temp is not None and post_temp is not None:
+            delta = round(post_temp - pre_temp, 2)
+            thermal_drift_str = f"{delta:+.1f}°C"
+
+
+    table.add_row("Device",          f"{connected_name} ({connected_abi})")
+    table.add_row("Runtime",         "tflite (ADB)")
+    table.add_row("Runs",            _fi(view.cpu_count))
+    table.add_row("Failures",        "—")
+    table.add_row("", "")
+    table.add_row("Latency (p50)",   _f(view.cpu_p50_ms))
+    table.add_row("Latency (p95/tail)", _f(view.cpu_p90_ms))
+    table.add_row("Latency (mean)",  _f(view.cpu_avg_ms))
+    table.add_row("Latency (std)",   _f(view.cpu_std_ms))
+    table.add_row("", "")
+    table.add_row("95% CI (p50)",    "— (not available via ADB - requires raw samples)")
+    table.add_row("", "")
+    table.add_row("Autocorrelation", "— (single-run stats only)")
+    table.add_row("Thermal drift", thermal_drift_str)
+    table.add_row("", "")
+    table.add_row("Memory (peak)",   _fm(view.cpu_peak_mem_mb))
+    table.add_row("", "")
+    table.add_row("Init time",       _f(view.cpu_init_ms))
+    table.add_row("Min",             _f(view.cpu_min_ms))
+    table.add_row("Max",             _f(view.cpu_max_ms))
+    table.add_row("Variance",        _fv(view.cpu_variance))
+
+    console.print()
+    console.print(table)
+    console.print()
+
+    # Stability
+    if view.stability and view.stability.stability_band:
+        band  = view.stability.stability_band.value
+        score = view.stability.stability_score
+        color = {"stable": "green", "noisy": "yellow", "unreliable": "red"}.get(band, "white")
+        score_str = f" (score={score:.3f})" if score is not None else ""
+        console.print(f"  Stability: [{color}]{band.upper()}[/{color}]{score_str}")
+
+    # Recommendation
+    rec = result.recommendation
+    KIND_STYLES = {
+        "use_cpu":  ("blue",   "→"),
+        "rerun":    ("yellow", "⚠"),
+    }
+    color, icon = KIND_STYLES.get(rec.kind.value, ("white", "•"))
+    console.print(f"\n  [{color}]{icon} {rec.message}[/{color}]")
+    console.print()
+    console.print(f"[green]✓ Benchmark saved to registry[/green]")
+    console.print(
+        f"[dim]Device: {connected_name} ({connected_abi}) — USB-C[/dim]\n"
+    )
+
+    if rec.kind.value == "rerun":
+        sys.exit(2)

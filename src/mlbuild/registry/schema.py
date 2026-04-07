@@ -32,7 +32,7 @@ v6 changes:
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -532,6 +532,18 @@ WHERE id = 1;
 """
 
 # ============================================================
+# Migration: v10 → v11
+# ============================================================
+
+MIGRATION_V10_TO_V11 = """
+ALTER TABLE builds ADD COLUMN device_abi  TEXT;
+ALTER TABLE builds ADD COLUMN device_name TEXT;
+
+UPDATE schema_version SET version = 11, applied_at = datetime('now')
+WHERE id = 1;
+"""
+
+# ============================================================
 # Migration registry — ordered list of all migrations
 # ============================================================
 
@@ -542,6 +554,7 @@ MIGRATIONS: list[tuple[int, int, str]] = [
     (7, 8, MIGRATION_V7_TO_V8),
     (8, 9, MIGRATION_V8_TO_V9),
     (9, 10, MIGRATION_V9_TO_V10),
+    (10, 11, MIGRATION_V10_TO_V11),
 ]
 
 

@@ -1,0 +1,14 @@
+{
+  "arm64-v8a": {
+    "version": "tflite-2.14",
+    "sha256": "5d45116eb86e3a23ea03318e93bfc8efb4dd0149d4692c127e7b0343faba1374"
+  },
+  "armeabi-v7a": {
+    "version": "tflite-2.14",
+    "sha256": ""
+  },
+  "x86_64": {
+    "version": "tflite-2.14",
+    "sha256": ""
+  }
+}

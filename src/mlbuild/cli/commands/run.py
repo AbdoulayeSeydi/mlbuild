@@ -278,7 +278,7 @@ def list_runs(manager: ExperimentManager, experiment: str, limit: int):
             return
 
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Run Name", no_wrap=True)
+        table.add_column("Run Name", no_wrap=True, overflow="ellipsis")
         table.add_column("ID", style="dim", no_wrap=True)
         table.add_column("Status", no_wrap=True)
         table.add_column("Build", no_wrap=True)

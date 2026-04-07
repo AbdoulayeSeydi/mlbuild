@@ -400,13 +400,19 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
 # CLI — build command  (Step 4 flag additions)
 # ============================================================
 
+
 @click.command()
 @click.option("--model",   required=True, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--backend",
     type=click.Choice(["coreml", "tflite"]),
     default="coreml",
-    help="Backend to use for conversion",
+    help="""Backend to use for conversion. 
+    NOTE: MLBuild only converts ONNX → CoreML or ONNX → TFLite.
+    CoreML and TFLite models must be registered with 'mlbuild import',
+    not converted. To convert between CoreML and TFLite, first export
+    your model to ONNX, then build for the target backend.
+""",
 )
 @click.option(
     "--target",
@@ -415,6 +421,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
         "apple_a18", "apple_a17", "apple_a16", "apple_a15",
         "apple_m3", "apple_m2", "apple_m1",
         "android_arm64", "android_arm32", "raspberry_pi",
+        "device-connected",
     ]),
 )
 @click.option("--name")
@@ -527,6 +534,35 @@ def build(
             console.print(f"Target:  {target}")
             console.print(f"Quantization: {quantize}\n")
 
+            # --- device-connected: resolve ABI from connected device ---
+            original_target = target 
+            device_abi  = None
+            device_name = None
+
+            if target == "device-connected":
+                try:
+                    from mlbuild.platforms.android.introspect import build_profile as _build_profile
+                    console.print("[dim]Detecting connected Android device...[/dim]")
+                    _profile = _build_profile()
+                    device_abi  = _profile.primary_abi
+                    device_name = f"{_profile.manufacturer} {_profile.model} (device-connected)"
+                    # Remap to a concrete target the converter understands
+                    _abi_to_target = {
+                        "arm64-v8a":   "android_arm64",
+                        "armeabi-v7a": "android_arm32",
+                        "x86_64":      "android_arm64",  # closest supported
+                    }
+                    target = _abi_to_target.get(_profile.primary_abi, "android_arm64")
+                    console.print(
+                        f"  Device:  [bold]{device_name}[/bold]\n"
+                        f"  ABI:     {device_abi}\n"
+                        f"  Target:  {target}\n"
+                    )
+                except Exception as exc:
+                    console.print(f"\n[red]No Android device detected.[/red] {exc}\n")
+                    console.print("[dim]Connect a device via USB-C with USB debugging enabled.[/dim]\n")
+                    sys.exit(1)
+
             representative_dataset = None
             if quantize == "int8":
                 console.print("[dim]Generating INT8 calibration data...[/dim]")
@@ -608,7 +644,7 @@ def build(
                 notes            = notes,
                 created_at       = datetime.now(timezone.utc),
                 source_path      = str(Path(model).resolve()),
-                target_device    = target,
+                target_device    = original_target, 
                 format           = backend,
                 quantization     = config["quantization"],
                 optimizer_config = config["optimizer"],
@@ -628,6 +664,8 @@ def build(
                 execution_mode   = detection.profile.execution.value,
                 nms_inside       = detection.profile.nms_inside,
                 state_optional   = detection.profile.state_optional,
+                device_abi       = device_abi,
+                device_name      = device_name,
                 model_profile_json = model_profile_json,
                 benchmark_caveats  = benchmark_caveats,
                 input_roles        = input_roles,
@@ -644,6 +682,9 @@ def build(
                 env_fingerprint, size_mb, final_path,
                 detection.profile, benchmark_caveats,
             )
+            if device_name:
+                console.print(f"Device:        {device_name}")
+                console.print(f"Device ABI:    {device_abi}")
             return
 
         except MLBuildError as e:
@@ -743,6 +784,32 @@ def build(
         if warn:
             console.print(f"[yellow]{warn}[/yellow]\n")
 
+        if target == "device-connected":
+            # Detect connected device — must be iOS for CoreML
+            try:
+                from mlbuild.platforms.android.adb import devices as adb_devices
+                android_devices = adb_devices()
+                if android_devices:
+                    console.print(
+                        "\n[red]Device mismatch.[/red]\n"
+                        "Connected device is Android but backend is CoreML.\n"
+                        "CoreML only runs on Apple devices.\n"
+                        "[dim]Use --backend tflite for Android, or connect an iPhone.[/dim]\n"
+                    )
+                    sys.exit(1)
+            except Exception:
+                pass
+
+            # No Android device — assume iOS (IDB not yet wired)
+            # Default to apple_a17 until IDB device detection is added
+            console.print(
+                "[yellow]⚠  No iOS device detected via IDB.[/yellow]\n"
+                "Defaulting to apple_a17 target.\n"
+                "When IDB is connected, the actual device target will be used.\n"
+            )
+            original_target = target
+            target = "apple_a17"
+
         # Convert
         with tempfile.TemporaryDirectory() as tmp_root:
             tmp_root = Path(tmp_root)
@@ -821,7 +888,7 @@ def build(
                 notes            = notes,
                 created_at       = datetime.now(timezone.utc),
                 source_path      = str(Path(model).resolve()),
-                target_device    = target,
+                target_device    = original_target,
                 format           = "coreml",
                 quantization     = config["quantization"],
                 optimizer_config = config["optimizer"],
@@ -1045,7 +1112,7 @@ def _run_coreml_build(
             notes             = notes,
             created_at        = datetime.now(timezone.utc),
             source_path       = str(model_path.resolve()),
-            target_device     = target,
+            target_device     = original_target,
             format            = "coreml",
             quantization      = config["quantization"],
             optimizer_config  = config["optimizer"],

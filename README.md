@@ -38,6 +38,7 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Build pinning | Protect builds from pruning via `mlbuild pin` / `mlbuild unpin` |
 | Registry search | Fuzzy search with filters via `mlbuild search` |
 | Model conversion | PyTorch → ONNX / CoreML / TFLite via `mlbuild convert` |
+| Android ADB bridge | USB device-connected benchmarking (Android arm64) |
 
 ---
 
@@ -188,6 +189,10 @@ mlbuild build --model model.onnx --target apple_m1 --quantize fp16
 # 1b. Or import a pre-built model
 mlbuild import --model model.tflite --target android_arm64
 mlbuild import --model model.mlpackage --target apple_m1 --quantize fp16
+
+# 1c. Or benchmark directly on a connected Android device
+mlbuild build --model model.onnx --target device-connected --backend tflite
+mlbuild benchmark <build-id>   # auto-routes to ADB pipeline
 
 # 2. Benchmark (automatic p50/p95/p99, task auto-detected)
 mlbuild benchmark <build-id>
@@ -357,11 +362,13 @@ mlbuild import --model model.tflite --target android_arm64 --json
 
 **Format/target compatibility:**
 
+**Format/target compatibility:**
+
 | Format | Valid Targets |
 |--------|--------------|
 | `onnx` | `onnxruntime_cpu`, `onnxruntime_gpu`, `onnxruntime_ane` |
-| `tflite` | `android_arm64`, `android_arm32`, `android_x86`, `raspberry_pi`, `coral_tpu`, `generic_linux` |
-| `coreml` | `apple_m1`, `apple_m2`, `apple_m3`, `apple_a15`, `apple_a16`, `apple_a17` |
+| `tflite` | `android_arm64`, `android_arm32`, `android_x86`, `raspberry_pi`, `coral_tpu`, `generic_linux`, `device-connected` |
+| `coreml` | `apple_m1`, `apple_m2`, `apple_m3`, `apple_a15`, `apple_a16`, `apple_a17`, `apple_a18`, `device-connected` |
 
 Imported builds are marked `[imported]` in `mlbuild log` output and tracked with `"imported": true` in their metadata.
 
@@ -1065,6 +1072,31 @@ mlbuild sync
 
 MLBuild automatically detects what kind of model you're benchmarking — vision, NLP, or audio — and generates semantically correct synthetic inputs for it. No dummy zero arrays, no manual shape specification.
 
+### Supported Model Subtypes
+
+MLBuild works across the full production model landscape — not just image classifiers.
+
+| Domain | Subtypes |
+|--------|----------|
+| **Vision** | Image classification, object detection (with/without NMS in graph), segmentation, vision embedding (CLIP-style) |
+| **NLP** | Text classification, token classification, embedding, question answering, seq2seq |
+| **Audio** | Speech recognition, audio classification, speaker embedding, waveform and spectrogram inputs |
+| **Multimodal** | Dual-encoder (image + text), asymmetric inputs, vision-language hybrids |
+| **Timeseries** | LSTM/GRU, TCN, PatchTST-style dynamic sequence, stateful models with explicit h0/c0 |
+| **Recommendation** | Neural matrix factorization, two-tower, large Gather (vocab 100k+) |
+| **Generative** | Autoregressive (GPT-style), KV-cache stateful, single-pass approximation |
+
+MLBuild handles the real production edge cases:
+- Dynamic input shapes (batch, sequence length, spatial dims)
+- Multi-input/output graphs
+- Pre/post-processing baked into the graph
+- FP32, FP16, and INT8 quantized variants
+- Large models (100MB+)
+- Stateful models (h0/c0, KV-cache, rolling context)
+- NMS inside vs. outside the graph
+
+Use `--force-domain`, `--force-subtype`, and `--force-execution` to override auto-detection when needed.
+
 ### Automatic Task Detection
 
 Detection runs through three tiers in order of confidence:
@@ -1298,6 +1330,41 @@ score = 0.6 * (baseline_latency / variant_latency) \
 - Imported builds tracked with `[imported]` badge in `mlbuild log`
 - Full MLBuild toolchain available immediately after import
 
+#### Device-Connected Benchmarking
+
+Benchmark directly on a physical Android device or emulator connected via USB-C — no Android Studio required.
+```bash
+# Build TFLite model for connected device (auto-detects ABI)
+mlbuild build --model model.onnx --target device-connected --backend tflite
+
+# Import an existing TFLite model for the connected device
+mlbuild import --model model.tflite --target device-connected
+
+# Benchmark — automatically routes to ADB pipeline
+mlbuild benchmark <build-id>
+```
+
+**Requirements:** `adb` installed and on PATH, USB debugging enabled on the device.
+
+**What it measures:**
+- Latency: p50, p95, mean, std, min, max, variance
+- Init time (model load)
+- Peak memory (MB)
+- Thermal drift (pre/post temperature delta in °C)
+- Stability score (stable / noisy / unreliable)
+- GPU and NNAPI delegate validation
+
+**Format/device compatibility:**
+
+| Format | Device | Result |
+|--------|--------|--------|
+| TFLite | Android (USB) | ✓ Benchmarks via ADB |
+| TFLite | Android emulator | ✓ Works with emulator warning |
+| CoreML | Android | ✗ Format mismatch — clear error |
+| CoreML | iPhone (IDB) | Coming in Phase 2 |
+
+Emulator runs are detected automatically and flagged with a warning — latency numbers from emulators are not representative of real hardware.
+
 ### Optimization
 - **FP16 quantization** — recompilation from ONNX graph
 - **Dynamic range INT8** — weight-only, no calibration data needed
@@ -1507,6 +1574,25 @@ mlbuild/
 │   │       ├── coreml_backend.py         # compile_from_graph, quantize_weights,
 │   │       │                             # quantize_weights_static, prune_weights
 │   │       └── tflite_backend.py         # quantize_from_graph
+│   ├── platforms/
+│   │   ├── android/
+│   │   │   ├── __init__.py
+│   │   │   ├── adb.py                    # ADB transport layer (push/pull/shell/devices)
+│   │   │   ├── baseline.py               # CPU baseline benchmark execution + parsing
+│   │   │   ├── benchmark.py              # Delegate benchmark execution (GPU/NNAPI)
+│   │   │   ├── delegate.py               # Delegate validation + failure classification
+│   │   │   ├── deploy.py                 # Model + binary deployment to device
+│   │   │   ├── device.py                 # ADBDevice entry point + BenchmarkConfig
+│   │   │   ├── history.py                # Per-device benchmark history persistence
+│   │   │   ├── introspect.py             # Device profiling (ABI, API level, chipset)
+│   │   │   ├── recomend.py               # Recommendation engine (use_cpu/rerun/delegate)
+│   │   │   ├── result.py                 # AndroidBuildView assembly + serialization
+│   │   │   ├── stability.py              # Stability scoring + thermal instability detection
+│   │   │   ├── thermal.py                # Thermal snapshot (battery temp, CPU freq)
+│   │   │   └── binaries/
+│   │   │       └── arm64-v8a/
+│   │   │           └── benchmark_model   # TFLite benchmark binary (6.8MB, nightly)
+│   │   └── ios/                          # IDB bridge — coming in Phase 2
 │   ├── profiling/
 │   │   ├── cold_start.py                 # Cold start decomposition
 │   │   ├── layer_profiler.py             # Per-layer timing
@@ -1577,11 +1663,14 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## Roadmap
 
-### Phase 1 — Device-Connected Benchmarking *(next)*
-- Android ADB bridge — benchmark on connected Android devices without Android Studio
-- Xcode Instruments integration — real iPhone hardware profiling
+### Phase 1 — Device-Connected Benchmarking *(complete)*
+- ✓ Android ADB bridge — benchmark on connected Android devices via USB-C
+- ✓ Emulator detection with clear warning
+- ✓ GPU/NNAPI delegate validation and classification
+- ✓ Stability scoring, thermal drift, per-run stats
+- Xcode IDB integration — real iPhone hardware profiling *(next)*
 
-### Phase 2 — More Backends
+### Phase 2 — More Backends *(next)*
 - TensorRT — NVIDIA GPU inference
 - Qualcomm QNN — Snapdragon NPU
 

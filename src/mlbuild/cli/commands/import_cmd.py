@@ -220,6 +220,7 @@ def _detect_task_for_import(model: Path, fmt: str, forced_task: str | None):
         "android_arm64", "android_arm32", "android_x86",
         "raspberry_pi", "coral_tpu", "generic_linux",
         "onnxruntime_cpu", "onnxruntime_gpu", "onnxruntime_ane",
+        "device-connected",
     ]),
     help="Target device this model was built for.",
 )
@@ -298,10 +299,14 @@ def _run_import(
 
     # Step 2: Validate target compatibility
     validate_format_target_compat(fmt, target)
-
+    
     # Step 3: Compute hashes
     console.print("[dim]Hashing source...[/dim]")
-    source_hash = compute_source_hash(model)
+    # Use directory-aware hashing for mlpackage directories
+    if model.is_dir():
+        source_hash = artifact_hash(model)
+    else:
+        source_hash = compute_source_hash(model)
 
     console.print("[dim]Hashing artifact...[/dim]")
     art_hash = artifact_hash(model)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import click
 from datetime import datetime, timezone, timedelta
-from textwrap import shorten
 
 from rich.console import Console
 from rich.table import Table
@@ -151,7 +150,7 @@ def _render_history_table(rows: list[dict]) -> Table:
 
     table.add_column("ID", style="dim", min_width=8, no_wrap=True)
     table.add_column("Time", style="dim", min_width=9, no_wrap=True)
-    table.add_column("Command", width=44, no_wrap=True)
+    table.add_column("Command", no_wrap=True, overflow="ellipsis", min_width=20)
     table.add_column("Result", min_width=8, no_wrap=True)
     table.add_column("Duration", min_width=8, no_wrap=True)
 
@@ -160,7 +159,7 @@ def _render_history_table(rows: list[dict]) -> Table:
         table.add_row(
             row["id"][:8],
             _time_ago(row["ran_at"]),
-            shorten(row["raw_command"], width=52, placeholder="…"),
+            row["raw_command"],
             _format_result(row),
             _format_duration(row.get("duration_ms")),
         )
@@ -185,20 +184,19 @@ def _render_history_entry(row: dict) -> str:
 # history command
 # ------------------------------------------------------------
 
-@click.group(help="Show and manage command history.")
+@click.group(invoke_without_command=True, help="Show and manage command history.")
 @click.option(
     "--filter",
     "filter_cmd",
-    type=click.Choice(
-        [
-            "accuracy", "baseline", "benchmark", "budget", "build",
-            "ci", "ci-check", "compare", "compare-compute-units",
-            "compare-quantization", "diff", "doctor", "experiment",
-            "explore", "import", "init", "log", "optimize", "profile",
-            "pull", "push", "remote", "report", "run", "status", "sync",
-            "tag", "validate", "failed",
-        ]
-    ),
+    type=click.Choice([
+    "accuracy", "baseline", "benchmark", "budget", "build",
+    "ci", "ci-check", "compare", "compare-compute-units",
+    "compare-quantization", "convert", "diff", "doctor", "experiment",
+    "explore", "export", "import", "init", "inspect", "log", "optimize",
+    "pin", "unpin", "profile", "prune", "pull", "push", "remote",
+    "rename", "report", "run", "search", "status", "sync", "tag",
+    "upgrade", "validate", "failed",
+    ]),
 )
 @click.option("--since")
 @click.option("--build-id")

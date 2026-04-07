@@ -105,7 +105,7 @@ def cli(ctx, strict_output):
                     key = arg.lstrip("-")
                     if i + 1 < len(raw_args) and not raw_args[i + 1].startswith("--"):
                         val = raw_args[i + 1]
-                        if len(val) < 200:
+                        if len(val) < 500:
                             args_dict[key] = val
                         i += 2
                     else:
@@ -128,7 +128,7 @@ def cli(ctx, strict_output):
                 "platform":            machine["platform"],
                 "command_name":        command_name,
                 "args_json":           json.dumps(args_dict, sort_keys=True),
-                "raw_command":         "mlbuild " + " ".join(raw_args),
+                "raw_command":         _sanitize_raw_command(command_name, raw_args, args_dict),
                 "linked_build_id":     ctx.obj.get("_linked_build_id"),
                 "linked_benchmark_id": ctx.obj.get("_linked_benchmark_id"),
                 "exit_code":           ctx.obj.get("_exit_code", 0),
@@ -162,6 +162,22 @@ def _resolve_strict(ctx: click.Context, command_flag: bool) -> bool:
 # Auto-instrumentation — fires after every command completes
 # ------------------------------------------------------------
 
+def _sanitize_raw_command(command_name: str, raw_args: list, args_dict: dict) -> str:
+    """Build a readable raw_command string, shortening long paths."""
+    if command_name == "import" and "model" in args_dict:
+        model_val = args_dict.get("model", "")
+        short_model = Path(model_val).name[:32] if model_val else "?"
+        other = " ".join(
+            f"--{k} {v}" for k, v in args_dict.items()
+            if k != "model" and v is not True
+        )
+        flags = " ".join(
+            f"--{k}" for k, v in args_dict.items()
+            if k != "model" and v is True
+        )
+        return f"mlbuild import --model {short_model} {other} {flags}".strip()
+    return "mlbuild " + " ".join(raw_args)
+
 # Commands that are non-mutating introspection only.
 # Logging these creates noise in history.
 _EXCLUDED_FROM_HISTORY = frozenset({
@@ -194,6 +210,7 @@ _EXCLUDED_FROM_HISTORY = frozenset({
         "apple_m3", "apple_m2", "apple_m1",
         "android_arm64", "android_arm32", "android_x86",
         "raspberry_pi", "coral_tpu", "generic_linux",
+        "device-connected",
     ]),
 )
 @click.option("--name")

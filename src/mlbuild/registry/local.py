@@ -13,7 +13,7 @@ Invariants:
 - Tags are Docker-style aliases (1 tag -> 1 build).
 """
 
-
+import os
 import json
 import logging
 import sqlite3
@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from ..core.accuracy.config import AccuracyResult
 
 logger = logging.getLogger(__name__)
+
+DEBUG = os.getenv("MLBUILD_DEBUG") == "1"
 
 
 # ------------------------------------------------------------
@@ -282,7 +284,13 @@ class LocalRegistry:
                     getattr(build, "cached_latency_p50_ms", None),
                     getattr(build, "cached_latency_p95_ms", None),
                     getattr(build, "cached_memory_peak_mb", None),
-                )
+                    getattr(build, "device_abi", None),
+                    getattr(build, "device_name", None),
+                    getattr(build, "subtype", None) or "none", 
+                    getattr(build, "execution_mode", None) or "standard", 
+                    1 if getattr(build, "nms_inside", False) else 0, 
+                    1 if getattr(build, "state_optional", False) else 0,
+)
                 
                 logger.info(f"Inserting {len(values)} values into builds table")
                 
@@ -302,13 +310,15 @@ class LocalRegistry:
                         has_graph, graph_format, graph_path,
                         cached_latency_p50_ms, cached_latency_p95_ms,
                         cached_memory_peak_mb,
+                        device_abi, device_name,
                         subtype, execution_mode, nms_inside, state_optional
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?,
+                        ?
                     )
                     """,
                     values,
@@ -317,17 +327,15 @@ class LocalRegistry:
                 logger.info("Build saved successfully!")
             except sqlite3.IntegrityError as exc:
                 conn.execute("ROLLBACK;")
-                logger.error(f"SQLite IntegrityError: {exc}")
-                logger.error(f"Error message: {str(exc)}")
-                
-                cursor = conn.execute(
-                    "SELECT build_id, artifact_hash, env_fingerprint, created_at FROM builds LIMIT 5"
-                )
-                rows = cursor.fetchall()
-                logger.error(f"Current builds in DB: {len(rows)}")
-                for row in rows:
-                    logger.error(f"  {row['build_id'][:16]}... | {row['artifact_hash'][:16]}... | {row['created_at']}")
-                
+                if DEBUG:
+                    logger.error(f"SQLite IntegrityError: {exc}")
+                    cursor = conn.execute(
+                        "SELECT build_id, artifact_hash, env_fingerprint, created_at FROM builds LIMIT 5"
+                    )
+                    rows = cursor.fetchall()
+                    logger.error(f"Current builds in DB: {len(rows)}")
+                    for row in rows:
+                        logger.error(f"  {row['build_id'][:16]}... | {row['artifact_hash'][:16]}... | {row['created_at']}")
                 raise InternalError(
                     "Build already exists or violates uniqueness constraints"
                 ) from exc
@@ -1502,4 +1510,6 @@ class LocalRegistry:
             execution_mode=safe_get(row, "execution_mode", "standard"),
             nms_inside=bool(safe_get(row, "nms_inside", 0)),
             state_optional=bool(safe_get(row, "state_optional", 0)),
+            device_abi=safe_get(row, "device_abi"),
+            device_name=safe_get(row, "device_name"),
         )

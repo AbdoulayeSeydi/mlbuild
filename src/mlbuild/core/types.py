@@ -134,6 +134,11 @@ class Build:
     # Stateful-specific: True when state inputs are optional (PARTIALLY_STATEFUL).
     state_optional: bool = False
 
+    # v11: device-connected build fields
+    # NULL for all static-target builds. Populated only when --target device-connected.
+    device_abi:  Optional[str] = None   # "arm64-v8a", "armeabi-v7a", "x86_64"
+    device_name: Optional[str] = None   # "Samsung S23 (device-connected)"
+
     # Full ModelProfile serialized as JSON for forward compatibility.
     # Includes domain, subtype, execution, confidence, confidence_tier,
     # nms_inside, state_optional.
@@ -183,6 +188,8 @@ class Build:
             "quantization_type": self.quantization_type,
             "subtype":          self.subtype,
             "execution_mode":   self.execution_mode,
+            "device_abi":       self.device_abi,
+            "device_name":      self.device_name,
         }
         if include_hashes:
             data.update({

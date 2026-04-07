@@ -36,6 +36,9 @@ class ExitCode(int, Enum):
     BENCHMARK_ERROR = 14
     CONVERT_ERROR = 15
     CONVERSION_CANCELLED = 16
+    ADB_ERROR       = 20
+    DEPLOY_ERROR    = 21
+    EXECUTION_ERROR = 22
     
     INTERNAL_ERROR = 99
 
@@ -78,6 +81,18 @@ class ErrorCode(str, Enum):
     # 4xxx – Benchmark / Device
     BENCHMARK_FAILED = "E4001"
     DEVICE_UNSUPPORTED = "E4002"
+
+    # 5xxx – ADB / Android
+    ADB_NOT_FOUND          = "E5001"
+    ADB_NO_DEVICE          = "E5002"
+    ADB_UNAUTHORIZED       = "E5003"
+    ADB_OFFLINE            = "E5004"
+    ADB_MULTIPLE_DEVICES   = "E5005"
+    ADB_TIMEOUT            = "E5006"
+    ADB_UNSUPPORTED_ABI    = "E5007"
+    ADB_DEPLOY_FAILED      = "E5008"
+    ADB_EXECUTION_FAILED   = "E5009"
+    ADB_PARSE_FAILED       = "E5010"
 
     # 9xxx – Internal
     INTERNAL_ERROR = "E9001"
@@ -337,6 +352,138 @@ class InternalError(MLBuildError):
             **kwargs,
         )
 
+# ---------------------------------------------------------------------
+# Android / ADB Errors
+# ---------------------------------------------------------------------
+
+class ADBNotFoundError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message="ADB not found. Install Android SDK Platform Tools and ensure 'adb' is in your PATH.",
+            error_code=ErrorCode.ADB_NOT_FOUND,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="adb_init",
+            **kwargs,
+        )
+
+
+class ADBNoDeviceError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message="No Android device detected. Connect via USB and enable USB debugging.",
+            error_code=ErrorCode.ADB_NO_DEVICE,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="device_discovery",
+            **kwargs,
+        )
+
+
+class ADBUnauthorizedError(MLBuildError):
+    def __init__(self, serial: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Device not authorized. Accept the USB debugging prompt on your phone.",
+            error_code=ErrorCode.ADB_UNAUTHORIZED,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="device_discovery",
+            context={"serial": serial} if serial else None,
+            **kwargs,
+        )
+
+
+class ADBOfflineError(MLBuildError):
+    def __init__(self, serial: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Device went offline after retries. Try unplugging and reconnecting.",
+            error_code=ErrorCode.ADB_OFFLINE,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="device_discovery",
+            context={"serial": serial} if serial else None,
+            **kwargs,
+        )
+
+
+class ADBMultipleDevicesError(MLBuildError):
+    def __init__(self, serials: list[str], **kwargs):
+        super().__init__(
+            message=f"Multiple devices found: {', '.join(serials)}. Use --serial to specify one.",
+            error_code=ErrorCode.ADB_MULTIPLE_DEVICES,
+            category=ErrorCategory.USER,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="device_discovery",
+            context={"serials": serials},
+            **kwargs,
+        )
+
+
+class ADBTimeoutError(MLBuildError):
+    def __init__(self, command: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="ADB command timed out. The device may be unresponsive.",
+            error_code=ErrorCode.ADB_TIMEOUT,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.ADB_ERROR,
+            stage="adb_transport",
+            context={"command": command} if command else None,
+            **kwargs,
+        )
+
+
+class UnsupportedABIError(MLBuildError):
+    def __init__(self, abi: str, **kwargs):
+        super().__init__(
+            message=f"No benchmark binary for ABI '{abi}'. Open an issue on GitHub.",
+            error_code=ErrorCode.ADB_UNSUPPORTED_ABI,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.DEPLOY_ERROR,
+            stage="deploy",
+            context={"abi": abi},
+            signature=abi,
+            **kwargs,
+        )
+
+
+class DeployError(MLBuildError):
+    def __init__(self, detail: str, run_id: Optional[str] = None, **kwargs):
+        super().__init__(
+            message=f"Failed to deploy to device: {detail}",
+            error_code=ErrorCode.ADB_DEPLOY_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.DEPLOY_ERROR,
+            stage="deploy",
+            context={"run_id": run_id} if run_id else None,
+            **kwargs,
+        )
+
+
+class ExecutionError(MLBuildError):
+    def __init__(self, raw_stdout: str, run_id: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Benchmark crashed on device. Raw stdout attached.",
+            error_code=ErrorCode.ADB_EXECUTION_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.EXECUTION_ERROR,
+            stage="benchmark_execution",
+            context={"run_id": run_id} if run_id else None,
+            details={"raw_stdout": raw_stdout},
+            **kwargs,
+        )
+
+
+class ParseError(MLBuildError):
+    def __init__(self, raw_stdout: str, **kwargs):
+        super().__init__(
+            message="Could not parse benchmark output. Raw stdout attached.",
+            error_code=ErrorCode.ADB_PARSE_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.EXECUTION_ERROR,
+            stage="result_parsing",
+            details={"raw_stdout": raw_stdout},
+            **kwargs,
+        )
 
 # ---------------------------------------------------------------------
 # Public API
@@ -356,4 +503,14 @@ __all__ = [
     "ModelValidationError",
     "BenchmarkError",
     "InternalError",
+    "ADBNotFoundError",
+    "ADBNoDeviceError",
+    "ADBUnauthorizedError",
+    "ADBOfflineError",
+    "ADBMultipleDevicesError",
+    "ADBTimeoutError",
+    "UnsupportedABIError",
+    "DeployError",
+    "ExecutionError",
+    "ParseError",
 ]

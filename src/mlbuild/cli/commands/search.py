@@ -160,7 +160,7 @@ def search(query, target, task, fmt, tag, date_from, date_to, limit, as_json):
 
     table = Table(box=box.SIMPLE, show_header=True, pad_edge=False)
     table.add_column("ID",      style="cyan",  min_width=10, no_wrap=True)
-    table.add_column("Name",    min_width=20, no_wrap=True)
+    table.add_column("Name",    min_width=20, no_wrap=True, overflow="ellipsis")
     table.add_column("Format",  min_width=8, no_wrap=True)
     table.add_column("Target",  min_width=14, no_wrap=True)
     table.add_column("Task",    min_width=8, no_wrap=True)

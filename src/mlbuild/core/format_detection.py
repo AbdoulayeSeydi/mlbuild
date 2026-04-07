@@ -31,6 +31,7 @@ TargetFamily = Literal[
     "linux_arm",
     "linux_x86",
     "onnxruntime",
+    "device_connected"
 ]
 
 Capability = Literal[
@@ -122,6 +123,8 @@ _TARGET_TO_FAMILY: Dict[str, TargetFamily] = {
     "onnxruntime_cpu": "onnxruntime",
     "onnxruntime_gpu": "onnxruntime",
     "onnxruntime_ane": "onnxruntime",
+    # Generic "device-connected" SKU for dynamic detection (e.g. via ADB)
+    "device-connected": "device_connected",
 }
 
 
@@ -270,6 +273,11 @@ def detect_and_validate_format(path: Path) -> Format:
     if not path.exists():
         raise FileNotFoundError(f"Model not found: {path}")
 
+    # Check if directory is an mlpackage before checking suffix
+    if path.is_dir() and (path / "Manifest.json").exists():
+        _validate_mlpackage(path)
+        return "coreml"
+
     suffix = path.suffix.lower()
 
     if suffix == ".tflite":
@@ -347,6 +355,7 @@ FormatRegistry.register(
             "android",
             "linux_arm",
             "linux_x86",
+            "device_connected"
         }),
         capabilities=frozenset({
             "cpu",
@@ -365,6 +374,7 @@ FormatRegistry.register(
         supported_targets=frozenset({
             "apple_silicon",
             "apple_ios",
+            "device_connected"
         }),
         capabilities=frozenset({
             "cpu",
