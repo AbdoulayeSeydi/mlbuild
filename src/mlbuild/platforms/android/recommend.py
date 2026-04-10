@@ -71,7 +71,7 @@ def _get_logger() -> logging.Logger:
             )
             handler.setFormatter(formatter)
             logger.addHandler(handler)
-            logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+            logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
             _logger_instance = logger
     return _logger_instance
 

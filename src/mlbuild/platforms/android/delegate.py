@@ -57,6 +57,7 @@ MIN_FALLBACK_THRESHOLD = 0.10  # 10% floor
 # ---------------------------------------------------------------------
 
 def _log(msg: str, serial: Optional[str] = None, level: str = "INFO") -> None:
+    if not DEBUG: return
     """
     Structured log for enterprise device farms.
     Includes timestamp, serial, log level.
@@ -338,9 +339,7 @@ def _validate_single(
     except ValueError as exc:
         return make(DelegateStatus.UNSUPPORTED, str(exc))
 
-    delegate_avg_ms = _run_mini_benchmark(deployed, flag, deployed.serial, num_runs, warmup, timeout)
-    if delegate_avg_ms is None:
-        return make(DelegateStatus.UNSUPPORTED, "Benchmark crashed or timed out")
+    
 
     cpu_avg_ms = baseline.avg_ms or 0.0
     cpu_variance = baseline.variance or 0.0

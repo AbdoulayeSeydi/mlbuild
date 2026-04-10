@@ -334,15 +334,23 @@ def diff(build_a, build_b, as_json, ignore_size, ignore_quant, deep):
 @click.argument('build_id')
 @click.option('--runs', default=100, type=int)
 @click.option('--warmup', default=20, type=int)
-@click.option('--compute-unit', 
+@click.option('--compute-unit',
               type=click.Choice(['CPU_ONLY', 'CPU_AND_GPU', 'ALL']),
               default='ALL')
 @click.option('--json', 'as_json', is_flag=True)
-# --- PATCH: task + strict-output forwarded ---
 @click.option('--task', default=None,
               type=click.Choice(['vision', 'nlp', 'audio', 'unknown']))
 @click.option('--strict-output', 'strict_output', is_flag=True, default=False)
-def benchmark(build_id, runs, warmup, compute_unit, as_json, task, strict_output):
+@click.option('--platform', default=None,
+              type=click.Choice(['ios', 'android']),
+              help='Force platform when both iOS and Android devices are connected.')
+@click.option('--udid', default=None,
+              help='iOS Simulator or device UDID (device-connected builds only).')
+@click.option('--signed-app', 'signed_app', default=None,
+              type=click.Path(exists=True),
+              help='Path to signed MLBuildRunner.app for real iOS device benchmarking.')
+def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
+              strict_output, platform, udid, signed_app):
     """Benchmark a build on current device. Supports CoreML and TFLite formats."""
     from .commands.benchmark import benchmark as benchmark_cmd
     ctx = click.get_current_context()
@@ -355,6 +363,9 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task, strict_output
         as_json=as_json,
         task=task,
         strict_output=_resolve_strict(ctx, strict_output),
+        platform=platform,
+        udid=udid,
+        signed_app=signed_app,
     )
 
 @cli.command()

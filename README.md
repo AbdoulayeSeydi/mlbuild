@@ -39,6 +39,7 @@ MLBuild is the missing performance layer for on-device ML CI/CD. While MLflow, D
 | Registry search | Fuzzy search with filters via `mlbuild search` |
 | Model conversion | PyTorch → ONNX / CoreML / TFLite via `mlbuild convert` |
 | Android ADB bridge | USB device-connected benchmarking (Android arm64) |
+| iOS IDB bridge | Simulator (CPU/GPU) — real device requires Apple Developer account |
 
 ---
 
@@ -1377,8 +1378,9 @@ Emulator runs are detected automatically and flagged with a warning — latency 
 | TFLite | `android_arm32` | Mac host | ✓ Local TFLite runner |
 | TFLite | `raspberry_pi` | Mac host | ✓ Local TFLite runner |
 | CoreML | `device-connected` | Android connected | ✗ Device mismatch at build time |
-| CoreML | `device-connected` | Android connected | ✗ Format mismatch at benchmark |
-| CoreML | `device-connected` | iPhone via IDB | ✓ IDB pipeline (Phase 2) |
+| CoreML | `device-connected` | Andoid connected | ✗ Format mismatch at benchmark |
+| CoreML | `device-connected` | iOS Simulator (IDB) | ✓ Simulator — CPU/GPU only, no ANE |
+| CoreML | `device-connected` | Real iPhone (IDB) | ✓ Requires Apple Developer account + --signed-app |
 | CoreML | `device-connected` | No device | ✓ Builds with `apple_a17` default + warning |
 | CoreML | `apple_m1/m2/m3` | Mac host | ✓ Local CoreML runner |
 | CoreML | `apple_a15`–`a18` | Mac host | ✓ Local CoreML runner |
@@ -1615,7 +1617,25 @@ mlbuild/
 │   │   │   └── binaries/
 │   │   │       └── arm64-v8a/
 │   │   │           └── benchmark_model   # TFLite benchmark binary (6.8MB, nightly)
-│   │   └── ios/                          # IDB bridge — coming in Phase 2
+│   │   └── ios/
+│       ├── __init__.py
+│       ├── idb.py                    # idb/simctl transport layer (push/pull/spawn/install)
+│       ├── baseline.py               # CPU baseline benchmark execution + parsing
+│       ├── benchmark.py              # Delegate benchmark execution (GPU/ANE)
+│       ├── consistency.py            # Output consistency checking between CPU and delegate
+│       ├── delegate.py               # Delegate validation + caching + fallback detection
+│       ├── deploy.py                 # Model compilation (.mlmodel→.mlmodelc) + deployment
+│       ├── device.py                 # IDBDevice entry point + BenchmarkConfig
+│       ├── history.py                # Per-device benchmark history persistence
+│       ├── introspect.py             # Device profiling (chip, iOS version, ANE availability)
+│       ├── recommend.py              # Recommendation engine (use_cpu/use_delegate/rerun)
+│       ├── result.py                 # iOSBuildView assembly + serialization
+│       ├── stability.py              # Stability scoring + thermal state detection
+│       ├── thermal.py                # Thermal state (IOSThermalState enum)
+│       ├── chip_map.json             # Apple chip → OS version mapping
+│       └── binaries/
+│           └── arm64-sim/
+│               └── MLBuildRunner.app # CoreML benchmark runner (iOS Simulator)          
 │   ├── profiling/
 │   │   ├── cold_start.py                 # Cold start decomposition
 │   │   ├── layer_profiler.py             # Per-layer timing
@@ -1691,7 +1711,8 @@ MIT License — see [LICENSE](LICENSE) for details.
 - ✓ Emulator detection with clear warning
 - ✓ GPU/NNAPI delegate validation and classification
 - ✓ Stability scoring, thermal drift, per-run stats
-- Xcode IDB integration — real iPhone hardware profiling *(next)*
+- ✓ iOS IDB bridge — simulator benchmarking (CPU/GPU), auto-detection, format routing
+- Real iPhone ANE benchmarking — requires Apple Developer account *(next)*
 
 ### Phase 2 — More Backends *(next)*
 - TensorRT — NVIDIA GPU inference

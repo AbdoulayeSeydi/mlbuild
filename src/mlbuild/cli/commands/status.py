@@ -219,6 +219,29 @@ def render_status_text(data: Dict[str, Any]):
         for line in format_budget_display(data["budget"]).splitlines():
             console.print(f"  [dim]{line.strip()}[/dim]")
 
+    # Connected devices
+    try:
+        from ...platforms.ios.idb import list_targets
+        booted = [t for t in list_targets() if t[2].lower() == "booted"]
+    except Exception:
+        booted = []
+
+    try:
+        from ...platforms.android.adb import devices as adb_devices
+        android = [d for d in adb_devices() if d[1] == "device"]
+    except Exception:
+        android = []
+
+    if booted or android:
+        console.print("  [bold]Connected:[/bold]")
+        for udid, name, _ in booted:
+            console.print(f"  [green]✓[/green] iOS      {name} [dim]({udid[:8]}...)[/dim]")
+        for serial, _ in android:
+            is_emu = "emulator" in serial
+            tag = "[EMULATOR]" if is_emu else "[DEVICE]"
+            console.print(f"  [green]✓[/green] Android  {serial} [dim]{tag}[/dim]")
+        console.print()
+
     console.print()
 
 

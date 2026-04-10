@@ -53,6 +53,7 @@ DEFAULT_TIMEOUT     = 600   # seconds per benchmark
 # ---------------------------------------------------------------------
 
 def _log(msg: str, serial: Optional[str] = None) -> None:
+    if not DEBUG: return
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     prefix = f"[mlbuild.baseline][{serial}]" if serial else "[mlbuild.baseline]"
     print(f"{ts} {prefix} {msg}", file=sys.stderr)

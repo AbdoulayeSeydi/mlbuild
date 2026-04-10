@@ -111,6 +111,52 @@ def check_mlbuild_directory() -> dict:
             result["registry_size_kb"] = registry_db.stat().st_size / 1024
     return result
 
+
+def check_device_toolchain() -> dict:
+    """Check ADB and iOS toolchain availability."""
+    import subprocess
+    results = {}
+
+    # ADB
+    try:
+        r = subprocess.run(["adb", "version"], capture_output=True, text=True, timeout=5)
+        results["adb"] = r.stdout.splitlines()[0] if r.returncode == 0 else None
+    except Exception:
+        results["adb"] = None
+
+    # xcrun simctl
+    try:
+        r = subprocess.run(["xcrun", "simctl", "list", "devices", "booted"], 
+                          capture_output=True, text=True, timeout=5)
+        results["simctl"] = "available" if r.returncode == 0 else None
+    except Exception:
+        results["simctl"] = None
+
+    # idb_companion
+    IDB_PATH = "/Users/abdoulayeseydi/idb/build/Build/Products/Release/idb_companion"
+    try:
+        r = subprocess.run([IDB_PATH, "--version"], capture_output=True, text=True, timeout=5)
+        results["idb_companion"] = "available" if r.returncode == 0 else None
+    except Exception:
+        results["idb_companion"] = None
+
+    # Booted simulators
+    try:
+        from mlbuild.platforms.ios.idb import list_targets
+        booted = [t for t in list_targets() if t[2].lower() == "booted"]
+        results["booted_simulators"] = [(t[0], t[1]) for t in booted]
+    except Exception:
+        results["booted_simulators"] = []
+
+    # Connected Android devices
+    try:
+        from mlbuild.platforms.android.adb import devices as adb_devices
+        results["android_devices"] = [d for d in adb_devices() if d[1] == "device"]
+    except Exception:
+        results["android_devices"] = []
+
+    return results
+
 # -------------------------------
 # CLI Command
 # -------------------------------
@@ -266,6 +312,26 @@ def doctor(as_json: bool, soft: bool):
             console.print(f"  Registry Size: {mlbuild_dir_results.get('registry_size_kb') or 0:.1f} KB")
         else:
             console.print("  [yellow]Not initialized (will be created on first build)[/yellow]")
+
+        # Device Toolchain
+        console.print("\n[bold]Device Toolchain:[/bold]")
+        toolchain = check_device_toolchain()
+
+        adb_ok = toolchain["adb"] is not None
+        console.print(f"  {'[green]✓[/green]' if adb_ok else '[dim]—[/dim]'} adb          {'available' if adb_ok else 'not found — install Android SDK platform-tools'}")
+
+        simctl_ok = toolchain["simctl"] is not None
+        console.print(f"  {'[green]✓[/green]' if simctl_ok else '[dim]—[/dim]'} simctl       {'available' if simctl_ok else 'not found — install Xcode'}")
+
+        idb_ok = toolchain["idb_companion"] is not None
+        console.print(f"  {'[green]✓[/green]' if idb_ok else '[dim]—[/dim]'} idb_companion {'available' if idb_ok else 'not found — build from source'}")
+
+        if toolchain["booted_simulators"]:
+            for udid, name in toolchain["booted_simulators"]:
+                console.print(f"  [dim]  Simulator: {name} ({udid[:8]}...)[/dim]")
+        if toolchain["android_devices"]:
+            for serial, _ in toolchain["android_devices"]:
+                console.print(f"  [dim]  Android:   {serial}[/dim]")
 
         # Summary
         console.print()

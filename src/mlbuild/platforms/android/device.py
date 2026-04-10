@@ -46,7 +46,7 @@ from mlbuild.platforms.android.benchmark import run_benchmark, BenchmarkResult
 from mlbuild.platforms.android.stability import compute_stability_report
 from mlbuild.platforms.android.result import assemble, to_registry_dict, AndroidBuildView
 from mlbuild.platforms.android.history import append_run
-from mlbuild.platforms.android.recomend import recommend, RecommendationResult
+from mlbuild.platforms.android.recommend import recommend, RecommendationResult
 from mlbuild.core.errors import DeployError, ExecutionError
 
 # ---------------------------------------------------------------------
@@ -73,7 +73,7 @@ def _get_logger() -> logging.Logger:
     global _logger_instance
     with _logger_lock:
         if _logger_instance is None:
-            logger = multiprocessing.get_logger()
+            logger = logging.getLogger("mlbuild.android.device")
             logger.propagate = False
             handler = logging.StreamHandler(sys.stderr) 
             handler.setFormatter(logging.Formatter(
@@ -81,7 +81,7 @@ def _get_logger() -> logging.Logger:
                 datefmt="%Y-%m-%dT%H:%M:%S",
             ))
             logger.addHandler(handler)
-            logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+            logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
             _logger_instance = logger
     return _logger_instance
 

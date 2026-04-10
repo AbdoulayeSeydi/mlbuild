@@ -63,6 +63,7 @@ _DELEGATE_FLAGS = {
 # ---------------------------------------------------------------------
 
 def _log(msg: str, deployed: Optional[DeployedRun] = None) -> None:
+    if not DEBUG: return
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     serial = f"[{deployed.serial}]" if deployed and deployed.serial else ""
     print(f"{ts} [mlbuild.consistency]{serial} {msg}", file=sys.stderr if DEBUG else sys.stdout)

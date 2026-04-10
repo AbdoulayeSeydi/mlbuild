@@ -65,11 +65,12 @@ def _get_logger() -> logging.Logger:
                 )
             )
             logger.addHandler(handler)
-            logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+            logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
             _logger_instance = logger
     return _logger_instance
 
 def _log(msg: str, level: str = "INFO", context: Optional[Dict[str, Any]] = None) -> None:
+    if not DEBUG: return
     logger = _get_logger()
     payload = {"msg": msg}
     if context:

@@ -63,7 +63,7 @@ def get_logger() -> logging.Logger:
         if _logger_instance is None:
             logger = logging.getLogger("mlbuild.stability")
             logger.propagate = False
-            logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+            logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
             if not logger.handlers:
                 handler = logging.StreamHandler(sys.stderr)
                 handler.setFormatter(logging.Formatter(
@@ -183,7 +183,7 @@ def compute_thermal_instability(thermal_score: Optional[ThermalScore],
 
     log(
         f"Thermal instability check: unstable={unstable}",
-        level="WARN" if unstable else "INFO",
+        level="DEBUG" if unstable else "DEBUG",
         context={
             "thermal_delta_c": delta,
             "latency_drift_pct": drift,
@@ -270,7 +270,7 @@ def compute_stability_report(
     # Downgrade if low sample count
     if low_confidence and raw_score is not None:
         raw_score = round(raw_score * 0.8, 4)
-        log(f"Score downgraded for low sample count: {raw_score}", "WARN")
+        log(f"Score downgraded for low sample count: {raw_score}", "DEBUG")
 
     # Band classification from raw_score
     # raw_score ≥ 0.9 → stable
@@ -312,7 +312,7 @@ def compute_stability_report(
     log(
         f"StabilityReport: score={raw_score} band={band.value} "
         f"thermally_unstable={unstable} rerun={rerun_score}",
-        level="WARN" if rerun_score > 0 else "INFO",
+        level="DEBUG" if rerun_score > 0 else "DEBUG",
         context={
             "stability_score":  raw_score,
             "stability_band":   band.value,

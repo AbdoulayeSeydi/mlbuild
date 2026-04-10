@@ -9,3 +9,5 @@ __pycache__/
 *.onnx
 .mlbuild/
 tests/fixtures/
+idb_companion.zip
+src/mlbuild/platforms/ios/binaries/

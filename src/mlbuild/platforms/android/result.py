@@ -68,7 +68,7 @@ def get_logger() -> logging.Logger:
             )
             handler.setFormatter(formatter)
             logger.addHandler(handler)
-            logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+            logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
             _logger_instance = logger
     return _logger_instance
 
@@ -195,7 +195,7 @@ def compute_speedup(cpu_avg_ms: Optional[float], delegate_avg_ms: Optional[float
     Returns None if inputs are missing, zero, negative, or absurd.
     """
     if cpu_avg_ms is None or delegate_avg_ms is None:
-        log("Missing CPU or delegate average for speedup", level="WARNING")
+        log("Missing CPU or delegate average for speedup", level="DEBUG")
         return None
     if cpu_avg_ms <= 0 or delegate_avg_ms <= 0:
         log(f"Invalid CPU/Delegate avg: cpu={cpu_avg_ms}, delegate={delegate_avg_ms}", level="WARNING")

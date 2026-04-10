@@ -39,6 +39,7 @@ class ExitCode(int, Enum):
     ADB_ERROR       = 20
     DEPLOY_ERROR    = 21
     EXECUTION_ERROR = 22
+    IDB_ERROR = 30
     
     INTERNAL_ERROR = 99
 
@@ -93,6 +94,20 @@ class ErrorCode(str, Enum):
     ADB_DEPLOY_FAILED      = "E5008"
     ADB_EXECUTION_FAILED   = "E5009"
     ADB_PARSE_FAILED       = "E5010"
+
+    # 6xxx – IDB / iOS
+    IDB_NOT_FOUND              = "E6001"
+    IDB_COMPANION_NOT_RUNNING  = "E6002"
+    IDB_NO_DEVICE              = "E6003"
+    IDB_UNAUTHORIZED           = "E6004"
+    IDB_OFFLINE                = "E6005"
+    IDB_MULTIPLE_DEVICES       = "E6006"
+    IDB_TIMEOUT                = "E6007"
+    IDB_UNSIGNED_BINARY        = "E6008"
+    IDB_SIMULATOR_BOOT_FAILED  = "E6009"
+    IDB_DEPLOY_FAILED          = "E6010"
+    IDB_EXECUTION_FAILED       = "E6011"
+    IDB_PARSE_FAILED           = "E6012"
 
     # 9xxx – Internal
     INTERNAL_ERROR = "E9001"
@@ -486,6 +501,167 @@ class ParseError(MLBuildError):
         )
 
 # ---------------------------------------------------------------------
+# iOS / IDB Errors
+# ---------------------------------------------------------------------
+
+class IDBNotFoundError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message="idb not found. Install via: brew install idb-companion",
+            error_code=ErrorCode.IDB_NOT_FOUND,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="idb_init",
+            **kwargs,
+        )
+
+
+class IDBCompanionNotRunningError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message="idb_companion is not running. Start with: idb_companion --daemon",
+            error_code=ErrorCode.IDB_COMPANION_NOT_RUNNING,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="idb_init",
+            **kwargs,
+        )
+
+
+class IDBNoDeviceError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message="No iOS simulator detected. Boot one via: xcrun simctl boot <udid>",
+            error_code=ErrorCode.IDB_NO_DEVICE,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="device_discovery",
+            **kwargs,
+        )
+
+
+class IDBUnauthorizedError(MLBuildError):
+    def __init__(self, udid: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Device not trusted. Unlock your iPhone and tap 'Trust' when prompted.",
+            error_code=ErrorCode.IDB_UNAUTHORIZED,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="device_discovery",
+            context={"udid": udid} if udid else None,
+            **kwargs,
+        )
+
+
+class IDBOfflineError(MLBuildError):
+    def __init__(self, udid: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Device went offline after retries. Try unplugging and reconnecting.",
+            error_code=ErrorCode.IDB_OFFLINE,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="device_discovery",
+            context={"udid": udid} if udid else None,
+            **kwargs,
+        )
+
+
+class IDBMultipleDevicesError(MLBuildError):
+    def __init__(self, udids: list[str], **kwargs):
+        super().__init__(
+            message=f"Multiple targets found: {', '.join(udids)}. Use --udid to specify one.",
+            error_code=ErrorCode.IDB_MULTIPLE_DEVICES,
+            category=ErrorCategory.USER,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="device_discovery",
+            context={"udids": udids},
+            **kwargs,
+        )
+
+
+class IDBTimeoutError(MLBuildError):
+    def __init__(self, command: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="idb command timed out. The target may be unresponsive.",
+            error_code=ErrorCode.IDB_TIMEOUT,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="idb_transport",
+            context={"command": command} if command else None,
+            **kwargs,
+        )
+
+
+class UnsignedBinaryError(MLBuildError):
+    def __init__(self, **kwargs):
+        super().__init__(
+            message=(
+                "Real device benchmarking requires a signed MLBuildRunner.app. "
+                "See: mlbuild.dev/ios-signing  "
+                "Use --signed-app <path> to provide your own signed build, "
+                "or run against a simulator instead."
+            ),
+            error_code=ErrorCode.IDB_UNSIGNED_BINARY,
+            category=ErrorCategory.USER,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="deploy",
+            **kwargs,
+        )
+
+
+class SimulatorBootError(MLBuildError):
+    def __init__(self, udid: Optional[str] = None, **kwargs):
+        super().__init__(
+            message=f"Simulator failed to boot. Try: xcrun simctl boot {udid or '<udid>'}",
+            error_code=ErrorCode.IDB_SIMULATOR_BOOT_FAILED,
+            category=ErrorCategory.ENVIRONMENT,
+            exit_code=ExitCode.IDB_ERROR,
+            stage="device_discovery",
+            context={"udid": udid} if udid else None,
+            **kwargs,
+        )
+
+
+class IDBDeployError(MLBuildError):
+    def __init__(self, detail: str, run_id: Optional[str] = None, **kwargs):
+        super().__init__(
+            message=f"Failed to deploy to iOS target: {detail}",
+            error_code=ErrorCode.IDB_DEPLOY_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.DEPLOY_ERROR,
+            stage="deploy",
+            context={"run_id": run_id} if run_id else None,
+            **kwargs,
+        )
+
+
+class IDBExecutionError(MLBuildError):
+    def __init__(self, raw_stdout: str, run_id: Optional[str] = None, **kwargs):
+        super().__init__(
+            message="Benchmark crashed on iOS target. Raw stdout attached.",
+            error_code=ErrorCode.IDB_EXECUTION_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.EXECUTION_ERROR,
+            stage="benchmark_execution",
+            context={"run_id": run_id} if run_id else None,
+            details={"raw_stdout": raw_stdout},
+            **kwargs,
+        )
+
+
+class IDBParseError(MLBuildError):
+    def __init__(self, raw_stdout: str, **kwargs):
+        super().__init__(
+            message="Could not parse iOS benchmark output. Raw stdout attached.",
+            error_code=ErrorCode.IDB_PARSE_FAILED,
+            category=ErrorCategory.BENCHMARK,
+            exit_code=ExitCode.EXECUTION_ERROR,
+            stage="result_parsing",
+            details={"raw_stdout": raw_stdout},
+            **kwargs,
+        )
+
+# ---------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------
 
@@ -513,4 +689,16 @@ __all__ = [
     "DeployError",
     "ExecutionError",
     "ParseError",
+    "IDBNotFoundError",
+    "IDBCompanionNotRunningError",
+    "IDBNoDeviceError",
+    "IDBUnauthorizedError",
+    "IDBOfflineError",
+    "IDBMultipleDevicesError",
+    "IDBTimeoutError",
+    "UnsignedBinaryError",
+    "SimulatorBootError",
+    "IDBDeployError",
+    "IDBExecutionError",
+    "IDBParseError",
 ]

@@ -2,7 +2,7 @@
 MLBuild - Deterministic build system for CoreML models with real device benchmarking.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Lazy imports - don't load heavy dependencies at module level
 def __getattr__(name):

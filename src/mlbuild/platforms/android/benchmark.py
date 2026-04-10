@@ -79,7 +79,7 @@ def _make_logger(serial: Optional[str] = None) -> logging.Logger:
             datefmt="%Y-%m-%dT%H:%M:%S",
         ))
         logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG if DEBUG else logging.INFO)
+    logger.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
     return logger
 
 
