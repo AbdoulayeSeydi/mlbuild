@@ -85,6 +85,7 @@ class BaselineResult:
     count:          Optional[int]
     low_confidence: bool
     compute_units:  str              # always "cpuOnly" for baseline
+    latency_trend:     Optional[list]   # per-run latencies for drift calc
     thermal_state:     Optional[str]    # post-run thermal state
     thermal_state_pre: Optional[str]    # pre-run thermal state (from thermal_boot event)
     raw_stdout:     str
@@ -259,6 +260,7 @@ def _parse_baseline_output(stdout: str) -> dict:
     peak_mem_mb = None
     thermal_state_json = None
     thermal_boot_state = None
+    latency_trend_list = []
 
     for line in stdout.splitlines():
         line = line.strip()
@@ -270,6 +272,9 @@ def _parse_baseline_output(stdout: str) -> dict:
             continue
         if obj.get("event") == "thermal_boot":
             thermal_boot_state = obj.get("state")
+            continue
+        if obj.get("event") == "run" and "latency_ms" in obj:
+            latency_trend_list.append(float(obj["latency_ms"]))
             continue
         if obj.get("event") == "result":
             avg_ms      = obj.get("avg_ms")
@@ -329,6 +334,7 @@ def _parse_baseline_output(stdout: str) -> dict:
         "low_confidence":      low_confidence,
         "thermal_state":       thermal_state,
         "thermal_state_pre":   thermal_boot_state,
+        "latency_trend":       latency_trend_list if latency_trend_list else None,
     }
 
 
@@ -414,6 +420,7 @@ def run_cpu_baseline(
         compute_units  = COMPUTE_UNITS_CPU,
         thermal_state     = metrics["thermal_state"],
         thermal_state_pre = metrics.get("thermal_state_pre"),
+        latency_trend     = metrics.get("latency_trend"),
         raw_stdout     = raw_stdout,
         run_id         = deployed.run_id,
         num_runs       = num_runs,

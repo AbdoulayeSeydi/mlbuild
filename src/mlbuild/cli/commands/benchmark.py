@@ -998,6 +998,10 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
         if pre_temp is not None and post_temp is not None:
             delta = round(post_temp - pre_temp, 2)
             thermal_drift_str = f"{delta:+.1f}°C"
+    if view.thermal_score and view.thermal_score.latency_drift_pct is not None:
+        pct = view.thermal_score.latency_drift_pct * 100
+        sign = "+" if pct >= 0 else ""
+        thermal_drift_str += f"  ({sign}{pct:.1f}% latency drift)"
 
     device_label = f"{connected_name} [EMULATOR]" if is_emulator else f"{connected_name}"
     table.add_row("Device",             device_label)
@@ -1102,6 +1106,10 @@ def _print_ios_result_table(view, profile, result, runs) -> None:
                   f"{view.speedup:.2f}x" if view.speedup else "—")
     table.add_row("", "")
     table.add_row("Thermal drift",       thermal_str)
+    if not profile.is_simulator and view.thermal_score and view.thermal_score.latency_drift_pct is not None:
+        pct = view.thermal_score.latency_drift_pct * 100
+        sign = "+" if pct >= 0 else ""
+        table.add_row("Latency drift",       f"{sign}{pct:.1f}%")
     table.add_row("Memory (peak)",       _fm(view.cpu_peak_mem_mb))
     table.add_row("Init time",           _f(view.cpu_init_ms))
     table.add_row("Variance",            _fv(view.cpu_variance))

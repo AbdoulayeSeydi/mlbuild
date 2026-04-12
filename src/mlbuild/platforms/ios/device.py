@@ -283,6 +283,8 @@ class IDBDevice:
             latency_trend = getattr(delegate_result, "latency_trend", None)
             if latency_trend and not isinstance(latency_trend, list):
                 latency_trend = None
+            if not latency_trend and baseline:
+                latency_trend = getattr(baseline, "latency_trend", None)
 
             # ---- 7. Post-run thermal snapshot ----
             thermal_post = self._safe_capture_snapshot(deployed, runner_stdout=baseline.raw_stdout)
