@@ -194,6 +194,20 @@ def _build_idb_command(
     num_runs:      int,
     warmup_runs:   int,
 ) -> list[str]:
+    if not deployed.is_simulator and deployed.udid:
+        return [
+            "xcrun", "devicectl", "device", "process", "launch",
+            "--device", deployed.udid, "--console", "--terminate-existing",
+            "com.mlbuild.MLBuildRunner",
+            f"--model={deployed.remote_model_path}",
+            f"--num_runs={num_runs}",
+            f"--warmup_runs={warmup_runs}",
+            f"--compute_units={compute_units}",
+            "--report_peak_memory=true",
+            "--report_thermal=true",
+            "--report_op_stats=true",
+            "--report_latency_trend=true",
+        ]
     if deployed.is_simulator and deployed.udid:
         app_result = subprocess.run(
             ["xcrun", "simctl", "get_app_container", deployed.udid, BUNDLE_ID, "app"],

@@ -321,7 +321,7 @@ def build_profile(udid: Optional[str] = None) -> DeviceProfile:
 
     profile = DeviceProfile(
         udid=confirmed_udid,
-        name=target.get("name") or info.get("name") or "unknown",
+        name=info.get("name") or target.get("name") or "unknown",
         model=model_identifier,
         ios_version=ios_version,
         chip=chip,

@@ -85,7 +85,8 @@ class BaselineResult:
     count:          Optional[int]
     low_confidence: bool
     compute_units:  str              # always "cpuOnly" for baseline
-    thermal_state:  Optional[str]    # raw string — thermal.py interprets it
+    thermal_state:     Optional[str]    # post-run thermal state
+    thermal_state_pre: Optional[str]    # pre-run thermal state (from thermal_boot event)
     raw_stdout:     str
     run_id:         str
     num_runs:       int
@@ -141,6 +142,11 @@ def _build_idb_cmd(
     deployed: DeployedRun,
     launch_args: list[str],
 ) -> list[str]:
+    if not deployed.is_simulator and deployed.udid:
+        binary = "com.mlbuild.MLBuildRunner"
+        return ["xcrun", "devicectl", "device", "process", "launch",
+                "--device", deployed.udid, "--console", "--terminate-existing",
+                binary] + launch_args
     if deployed.is_simulator and deployed.udid:
         binary = _sim_binary(deployed.udid)
         data_container = subprocess.run(
@@ -241,32 +247,55 @@ def _parse_baseline_output(stdout: str) -> dict:
     """
     Parse CoreML runner output.
 
-    CoreML runner reports milliseconds directly — no microsecond conversion
-    unlike Android's TFLite binary which reports microseconds.
-
-    Expected runner output lines:
-        avg_ms: 12.34
-        p50_ms: 12.10
-        p90_ms: 13.20
-        p99_ms: 14.50
-        init_ms: 45.00
-        std_ms: 0.82
-        min_ms: 11.90
-        max_ms: 15.30
-        count: 50
-        peak_memory_mb: 23.4
-        thermal_state: nominal
+    Primary: JSON event parsing — app emits {"event":"result","p50_ms":...}
+    Fallback: flat text parsing for simulator (simctl spawn path).
     """
-    avg_ms      = _parse_float(r"avg_ms:\s*(\d+\.?\d*)", stdout)
-    p50_ms      = _parse_float(r"p50_ms:\s*(\d+\.?\d*)", stdout)
-    p90_ms      = _parse_float(r"p90_ms:\s*(\d+\.?\d*)", stdout)
-    p99_ms      = _parse_float(r"p99_ms:\s*(\d+\.?\d*)", stdout)
-    init_ms     = _parse_float(r"init_ms:\s*(\d+\.?\d*)", stdout)
-    std_ms      = _parse_float(r"std_ms:\s*(\d+\.?\d*)", stdout)
-    min_ms      = _parse_float(r"min_ms:\s*(\d+\.?\d*)", stdout)
-    max_ms      = _parse_float(r"max_ms:\s*(\d+\.?\d*)", stdout)
-    count       = _parse_int(r"count:\s*(\d+)", stdout)
-    peak_mem_mb = _parse_float(r"peak_memory_mb:\s*(\d+\.?\d*)", stdout)
+    import json as _json
+
+    # Primary: scan for JSON result event
+    avg_ms = p50_ms = p90_ms = p99_ms = None
+    init_ms = std_ms = min_ms = max_ms = None
+    count = None
+    peak_mem_mb = None
+    thermal_state_json = None
+    thermal_boot_state = None
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = _json.loads(line)
+        except Exception:
+            continue
+        if obj.get("event") == "thermal_boot":
+            thermal_boot_state = obj.get("state")
+            continue
+        if obj.get("event") == "result":
+            avg_ms      = obj.get("avg_ms")
+            p50_ms      = obj.get("p50_ms")
+            p90_ms      = obj.get("p90_ms")
+            p99_ms      = obj.get("p99_ms")
+            init_ms     = obj.get("init_ms")
+            std_ms      = obj.get("std_ms") if "std_ms" in obj else None
+            min_ms      = obj.get("min_ms")
+            max_ms      = obj.get("max_ms")
+            count       = obj.get("count")
+            peak_mem_mb = obj.get("peak_memory_mb")
+            break
+
+    # Fallback: flat text parsing for simulator
+    if p50_ms is None:
+        avg_ms      = _parse_float(r"avg_ms:\s*(\d+\.?\d*)", stdout)
+        p50_ms      = _parse_float(r"p50_ms:\s*(\d+\.?\d*)", stdout)
+        p90_ms      = _parse_float(r"p90_ms:\s*(\d+\.?\d*)", stdout)
+        p99_ms      = _parse_float(r"p99_ms:\s*(\d+\.?\d*)", stdout)
+        init_ms     = _parse_float(r"init_ms:\s*(\d+\.?\d*)", stdout)
+        std_ms      = _parse_float(r"std_ms:\s*(\d+\.?\d*)", stdout)
+        min_ms      = _parse_float(r"min_ms:\s*(\d+\.?\d*)", stdout)
+        max_ms      = _parse_float(r"max_ms:\s*(\d+\.?\d*)", stdout)
+        count       = _parse_int(r"count:\s*(\d+)", stdout)
+        peak_mem_mb = _parse_float(r"peak_memory_mb:\s*(\d+\.?\d*)", stdout)
 
     # Variance: p90/p50 - 1 primary, std/avg fallback
     variance: Optional[float] = None
@@ -286,19 +315,20 @@ def _parse_baseline_output(stdout: str) -> dict:
     )
 
     return {
-        "avg_ms":         avg_ms,
-        "p50_ms":         p50_ms,
-        "p90_ms":         p90_ms,
-        "p99_ms":         p99_ms,
-        "init_ms":        init_ms,
-        "peak_mem_mb":    peak_mem_mb,
-        "variance":       variance,
-        "std_ms":         std_ms,
-        "min_ms":         min_ms,
-        "max_ms":         max_ms,
-        "count":          count,
-        "low_confidence": low_confidence,
-        "thermal_state":  thermal_state,
+        "avg_ms":              avg_ms,
+        "p50_ms":              p50_ms,
+        "p90_ms":              p90_ms,
+        "p99_ms":              p99_ms,
+        "init_ms":             init_ms,
+        "peak_mem_mb":         peak_mem_mb,
+        "variance":            variance,
+        "std_ms":              std_ms,
+        "min_ms":              min_ms,
+        "max_ms":              max_ms,
+        "count":               count,
+        "low_confidence":      low_confidence,
+        "thermal_state":       thermal_state,
+        "thermal_state_pre":   thermal_boot_state,
     }
 
 
@@ -382,7 +412,8 @@ def run_cpu_baseline(
         count          = metrics["count"],
         low_confidence = metrics["low_confidence"],
         compute_units  = COMPUTE_UNITS_CPU,
-        thermal_state  = metrics["thermal_state"],
+        thermal_state     = metrics["thermal_state"],
+        thermal_state_pre = metrics.get("thermal_state_pre"),
         raw_stdout     = raw_stdout,
         run_id         = deployed.run_id,
         num_runs       = num_runs,

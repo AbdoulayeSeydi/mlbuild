@@ -331,29 +331,55 @@ def list_targets() -> list[tuple[str, str, str]]:
 
 def describe(*, udid: Optional[str] = None) -> dict:
     """
-    Get device info via idb_companion --list 1 JSON output.
-    Bypasses Python fb-idb gRPC client entirely.
+    Get device info.
+    Real device: xcrun devicectl device info details
+    Simulator: idb_companion --list 1
     """
+    import json as _json
+    import tempfile
+
+    # Try devicectl for real device first
+    if udid:
+        try:
+            tmp = tempfile.mktemp(suffix=".json")
+            result = subprocess.run(
+                ["xcrun", "devicectl", "device", "info", "details",
+                 "--device", udid, "--json-output", tmp],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                data = _json.loads(open(tmp).read())
+                # devicectl info details structure
+                dev = data.get("result", {}).get("deviceProperties", {})
+                hw  = data.get("result", {}).get("hardwareProperties", {})
+                if dev or hw:
+                    return {
+                        "udid":         udid,
+                        "name":         hw.get("marketingName", dev.get("name", "unknown")),
+                        "os_version":   dev.get("osVersionNumber", "unknown"),
+                        "model":        hw.get("productType", hw.get("deviceType", "unknown")),
+                        "state":        "connected",
+                        "is_simulator": False,
+                    }
+        except Exception as e:
+            _log(f"devicectl describe failed: {e}")
+
+    # Fallback: idb_companion --list 1 for simulator
     result = subprocess.run(
         [IDB_COMPANION_BIN, "--list", "1"],
-        capture_output=True,
-        text=True,
-        timeout=10,
+        capture_output=True, text=True, timeout=10,
     )
-
-    import json as _json
     for line in result.stdout.splitlines():
         try:
             entry = _json.loads(line)
             if udid and entry.get("udid") != udid:
                 continue
-            # Normalize keys to match what introspect.py expects
             return {
-                "udid":       entry.get("udid", ""),
-                "name":       entry.get("name", "unknown"),
-                "os_version": entry.get("os_version", "unknown"),
-                "model":      entry.get("model", "unknown"),
-                "state":      entry.get("state", "unknown"),
+                "udid":         entry.get("udid", ""),
+                "name":         entry.get("name", "unknown"),
+                "os_version":   entry.get("os_version", "unknown"),
+                "model":        entry.get("model", "unknown"),
+                "state":        entry.get("state", "unknown"),
                 "is_simulator": entry.get("type", "").lower() == "simulator",
             }
         except Exception:
@@ -365,12 +391,12 @@ def describe(*, udid: Optional[str] = None) -> dict:
 # App Management
 # ---------------------------------------------------------------------
 
-def install(app_path: Path, *, udid: Optional[str] = None) -> None:
+def install(app_path: Path, *, udid: Optional[str] = None, is_simulator: bool = False) -> None:
     if not app_path.exists():
         raise IDBDeployError(detail=f"App bundle not found: {app_path}")
 
-    if udid:
-        # Use simctl directly for simulator — bypasses gRPC entirely
+    if udid and is_simulator:
+        # Simulator: simctl install — bypasses gRPC entirely
         result = subprocess.run(
             ["xcrun", "simctl", "install", udid, str(app_path)],
             capture_output=True,
@@ -381,10 +407,19 @@ def install(app_path: Path, *, udid: Optional[str] = None) -> None:
             raise IDBDeployError(detail=result.stderr or result.stdout)
         return
 
-    # Real device fallback — idb gRPC path
+    # Real device: use devicectl (Xcode 15+) — reliable, no gRPC needed
+    if udid:
+        result = subprocess.run(
+            ["xcrun", "devicectl", "device", "install", "app",
+             "--device", udid, str(app_path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            raise IDBDeployError(detail=result.stderr or result.stdout)
+        return
+
     result = run(
         ["install", str(app_path)],
-        udid=udid,
         timeout=TIMEOUTS["install"],
         retries=1,
     )
@@ -458,17 +493,48 @@ def _sim_container(udid: str, bundle_id: str) -> Path:
         )
     return Path(result.stdout.strip())
 
+def _device_container(udid: str, bundle_id: str) -> str:
+    """Get the data container path for a real device app via devicectl."""
+    import tempfile, json as _json
+    tmp = tempfile.mktemp(suffix=".json")
+    result = subprocess.run(
+        ["xcrun", "devicectl", "device", "copy", "to",
+         "--device", udid,
+         "--source", "/dev/null",
+         "--destination", "mlbuild_probe",
+         "--domain-type", "appDataContainer",
+         "--domain-identifier", bundle_id,
+         "--json-output", tmp],
+        capture_output=True, text=True, timeout=30,
+    )
+    try:
+        data = _json.loads(open(tmp).read())
+        path = data["result"]["files"][0]["path"]
+        # path is like /private/var/mobile/Containers/Data/Application/<UUID>/mlbuild_probe
+        return str(Path(path).parent)
+    except Exception:
+        # Fallback: parse from stderr
+        for line in result.stdout.splitlines():
+            if "/Containers/Data/Application/" in line:
+                import re
+                m = re.search(r"(/private/var/mobile/Containers/Data/Application/[A-F0-9\-]+)", line)
+                if m:
+                    return m.group(1)
+        raise IDBDeployError(detail="Could not determine device container path")
+
+
 def file_push(
     src: Path,
     remote_path: str,
     *,
     bundle_id: str,
     udid: Optional[str] = None,
+    is_simulator: bool = False,
 ) -> None:
     if not src.exists():
         raise IDBDeployError(detail=f"Missing file: {src}")
 
-    if udid:
+    if udid and is_simulator:
         container = _sim_container(udid, bundle_id)
         dest = container / remote_path
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -481,12 +547,28 @@ def file_push(
             _shutil.copy2(str(src), str(dest))
         return
 
+    # Real device: use devicectl appDataContainer
+    if udid:
+        # remote_path is like "Documents/mlbuild/<run_id>/model.mlmodelc"
+        # devicectl destination is relative to app data container
+        dest_dir = str(Path(remote_path).parent)
+        result = subprocess.run(
+            ["xcrun", "devicectl", "device", "copy", "to",
+             "--device", udid,
+             "--source", str(src),
+             "--destination", dest_dir,
+             "--domain-type", "appDataContainer",
+             "--domain-identifier", bundle_id],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            raise IDBDeployError(detail=result.stderr or result.stdout)
+        return
+
     result = run(
         ["file", "push", "--bundle-id", bundle_id, str(src), remote_path],
-        udid=udid,
         timeout=TIMEOUTS["file_push"],
         retries=2,
-        allow_restart_companion=True,
     )
     if not result.ok:
         raise IDBDeployError(detail=result.stderr or result.stdout)
@@ -498,10 +580,11 @@ def file_pull(
     *,
     bundle_id: str,
     udid: Optional[str] = None,
+    is_simulator: bool = False,
 ) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    if udid:
+    if udid and is_simulator:
         container = _sim_container(udid, bundle_id)
         src = container / remote_path
         if not src.exists():
@@ -525,8 +608,9 @@ def file_delete(
     *,
     bundle_id: str,
     udid: Optional[str] = None,
+    is_simulator: bool = False,
 ) -> None:
-    if udid:
+    if udid and is_simulator:
         container = _sim_container(udid, bundle_id)
         target = container / remote_path
         if target.exists():
@@ -534,9 +618,13 @@ def file_delete(
             _shutil.rmtree(str(target)) if target.is_dir() else target.unlink()
         return
 
+    # Real device: devicectl has no delete — skip, files are scoped per run
+    if udid:
+        _log(f"file_delete skipped on real device (no devicectl delete): {remote_path}")
+        return
+
     result = run(
         ["file", "delete", "--bundle-id", bundle_id, remote_path],
-        udid=udid,
         timeout=TIMEOUTS["file_delete"],
     )
     if not result.ok:

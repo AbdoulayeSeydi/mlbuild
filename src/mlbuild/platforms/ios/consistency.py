@@ -116,6 +116,18 @@ def _build_command(
     num_runs: int,
     warmup_runs: int,
 ) -> List[str]:
+    if not deployed.is_simulator and deployed.udid:
+        return [
+            "xcrun", "devicectl", "device", "process", "launch",
+            "--device", deployed.udid, "--console", "--terminate-existing",
+            "com.mlbuild.MLBuildRunner",
+            f"--model={deployed.remote_model_path}",
+            f"--num_runs={num_runs}",
+            f"--warmup_runs={warmup_runs}",
+            f"--compute_units={compute_units}",
+            "--print_output_tensors=true",
+            "--report_thermal=false",
+        ]
     if deployed.is_simulator and deployed.udid:
         app_r = subprocess.run(
             ["xcrun", "simctl", "get_app_container", deployed.udid, BUNDLE_ID, "app"],

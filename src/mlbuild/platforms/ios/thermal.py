@@ -126,16 +126,33 @@ def parse_thermal_state(runner_stdout: str) -> Optional[IOSThermalState]:
     Returns None if the line is absent or unparseable.
     Caller decides whether to treat None as a warning or hard error.
     """
+    import json as _json
+
+    # Primary: parse from JSON result event
+    for line in runner_stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                obj = _json.loads(line)
+                if obj.get("event") == "result" and "thermal_state" in obj:
+                    state = IOSThermalState.from_string(obj["thermal_state"])
+                    if state is not None:
+                        _log(f"Parsed thermal state from JSON: {state.value}")
+                    return state
+            except Exception:
+                pass
+
+    # Fallback: flat text format
     for line in runner_stdout.splitlines():
         line = line.strip().lower()
         if line.startswith("thermal_state:"):
             _, _, raw = line.partition(":")
             state = IOSThermalState.from_string(raw.strip())
             if state is not None:
-                _log(f"Parsed thermal state: {state.value}")
+                _log(f"Parsed thermal state from flat text: {state.value}")
             return state
 
-    _log("No thermal_state line found in runner output")
+    _log("No thermal_state found in runner output")
     return None
 
 

@@ -285,7 +285,13 @@ class IDBDevice:
                 latency_trend = None
 
             # ---- 7. Post-run thermal snapshot ----
-            thermal_post = self._safe_capture_snapshot(deployed)
+            thermal_post = self._safe_capture_snapshot(deployed, runner_stdout=baseline.raw_stdout)
+
+            # Override pre-snapshot state from thermal_boot event
+            if thermal_pre is not None and getattr(baseline, "thermal_state_pre", None):
+                from mlbuild.platforms.ios.thermal import IOSThermalState, ThermalSnapshot
+                pre_state = IOSThermalState.from_string(baseline.thermal_state_pre)
+                thermal_pre = ThermalSnapshot(state=pre_state, is_simulated=self._profile.is_simulator)
 
             # ---- 8. Thermal score ----
             # compute_thermal_score returns None on simulator — handled inside
@@ -379,16 +385,14 @@ class IDBDevice:
             from mlbuild.core.errors import UnsignedBinaryError
             raise UnsignedBinaryError()
 
-    def _safe_capture_snapshot(self, deployed: DeployedRun):
+    def _safe_capture_snapshot(self, deployed: DeployedRun, runner_stdout: str = ""):
         """
         Thermal snapshot from last runner stdout on real device.
         Returns None on simulator or any failure — always non-fatal.
         """
         try:
-            # Pass empty stdout for pre-run snapshot — no runner output yet.
-            # thermal.py returns simulator_snapshot() immediately on is_simulated=True.
             return capture_snapshot(
-                runner_stdout = "",
+                runner_stdout = runner_stdout,
                 is_simulated  = self._profile.is_simulator,
             )
         except Exception as exc:

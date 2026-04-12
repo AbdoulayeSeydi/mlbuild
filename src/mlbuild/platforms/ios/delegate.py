@@ -230,7 +230,18 @@ def _run_mini_benchmark(
     runner stdout. This is the ground truth for fallback detection,
     more reliable than latency comparison alone.
     """
-    if deployed.is_simulator and deployed.udid:
+    if not deployed.is_simulator and deployed.udid:
+        _binary = "com.mlbuild.MLBuildRunner"
+        cmd = [
+            "xcrun", "devicectl", "device", "process", "launch",
+            "--device", deployed.udid, "--console", "--terminate-existing",
+            _binary,
+            f"--model={deployed.remote_model_path}",
+            f"--num_runs={num_runs}",
+            f"--warmup_runs={warmup}",
+            f"--compute_units={compute_units}",
+        ]
+    elif deployed.is_simulator and deployed.udid:
         _r = subprocess.run(
             ["xcrun", "simctl", "get_app_container", deployed.udid, BUNDLE_ID, "app"],
             capture_output=True, text=True, timeout=10,

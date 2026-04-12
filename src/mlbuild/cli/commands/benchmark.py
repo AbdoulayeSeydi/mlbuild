@@ -912,7 +912,7 @@ def _run_ios_device_benchmark(
     target_label = (
         f"{profile.name} [SIMULATOR]"
         if profile.is_simulator
-        else f"{profile.name} ({profile.chip})"
+        else profile.name
     )
 
     if not as_json:
@@ -1059,7 +1059,7 @@ def _print_ios_result_table(view, profile, result, runs) -> None:
     target_label = (
         f"{profile.name} [SIMULATOR]"
         if profile.is_simulator
-        else f"{profile.name} ({profile.chip})"
+        else profile.name
     )
 
     # Thermal — discrete state on real device, N/A on simulator
@@ -1086,7 +1086,7 @@ def _print_ios_result_table(view, profile, result, runs) -> None:
             (view.delegate, view.delegate_status.value.upper(), status_color)
         )
 
-    table.add_row("Device",              target_label)
+    table.add_row("Device",              target_label if profile.is_simulator else f"{target_label} (USB-C)")
     table.add_row("Runtime",             "coreml (IDB)")
     table.add_row("iOS",                 profile.ios_version)
     table.add_row("Compute units req.",  view.compute_units or "—")
@@ -1143,5 +1143,7 @@ def _print_ios_result_table(view, profile, result, runs) -> None:
     console.print()
     console.print("[green]✓ Benchmark saved to registry[/green]")
 
-    sim_note = " — Simulator (CPU/GPU only)" if profile.is_simulator else " — USB-C"
-    console.print(f"[dim]Device: {target_label}{sim_note}[/dim]\n")
+    if profile.is_simulator:
+        console.print(f"[dim]Device: {target_label} — Simulator (CPU/GPU only)[/dim]\n")
+    else:
+        console.print(f"[dim]Device: {target_label} (USB-C)[/dim]\n")
