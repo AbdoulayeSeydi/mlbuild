@@ -41,8 +41,8 @@ from mlbuild.platforms.ios.thermal import IOSThermalState, ThermalScore
 # ---------------------------------------------------------------------
 
 DEFAULT_LATENCY_DRIFT_PCT    = 0.10   # 10%
-DEFAULT_STABILITY_STABLE_MAX = 1.10
-DEFAULT_STABILITY_NOISY_MAX  = 1.30
+DEFAULT_STABILITY_STABLE_MAX = 1.15  # mobile-optimized: 0.85 score threshold
+DEFAULT_STABILITY_NOISY_MAX  = 1.43  # mobile-optimized: 0.70 score threshold
 
 # iOS thermal states that alone constitute instability
 _CRITICAL_THERMAL_STATES = {IOSThermalState.SERIOUS, IOSThermalState.CRITICAL}
@@ -282,6 +282,7 @@ def compute_stability_report(
     stable_max:      float = DEFAULT_STABILITY_STABLE_MAX,
     noisy_max:       float = DEFAULT_STABILITY_NOISY_MAX,
     drift_threshold: float = DEFAULT_LATENCY_DRIFT_PCT,
+    sensitivity_w:   float = 1.0,
 ) -> StabilityReport:
     """
     Compute unified StabilityReport for an iOS benchmark run.
@@ -300,7 +301,7 @@ def compute_stability_report(
 
     if p50_ms and p90_ms and p50_ms > 0:
         ratio     = p90_ms / p50_ms
-        raw_score = round(max(0.0, 1.0 - (ratio - 1.0)), 4)
+        raw_score = round(max(0.0, 1.0 - sensitivity_w * (ratio - 1.0)), 4)
         _log(
             f"Stability score from p90/p50: ratio={ratio:.3f} score={raw_score}",
             context={"p50": p50_ms, "p90": p90_ms, "ratio": ratio},
@@ -325,7 +326,7 @@ def compute_stability_report(
     # --- Band ---
     if raw_score is None:
         band = StabilityBand.UNRELIABLE
-    elif raw_score >= 0.90:
+    elif raw_score >= 0.85:
         band = StabilityBand.STABLE
     elif raw_score >= 0.70:
         band = StabilityBand.NOISY
