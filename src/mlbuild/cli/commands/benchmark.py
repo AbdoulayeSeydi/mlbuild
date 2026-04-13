@@ -1027,6 +1027,9 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
     android_minmax = f"{_f(view.cpu_min_ms)} / {_f(view.cpu_max_ms)}" if view.cpu_min_ms and view.cpu_max_ms else "—"
 
     table.add_row("Runs",               _fi(view.cpu_count))
+    if build:
+        table.add_row("Model size",         f"{float(build.size_mb):.2f} MB" if build.size_mb else "—")
+        table.add_row("Quantization",       getattr(build, "quantization_type", None) or "—")
     table.add_row("", "")
     table.add_row("Latency (p50)",      _f(view.cpu_p50_ms))
     table.add_row("Latency (p95/tail)", _f(view.cpu_p90_ms))
