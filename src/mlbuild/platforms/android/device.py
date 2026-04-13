@@ -314,7 +314,19 @@ class ADBDevice:
     ) -> Tuple[Optional[BenchmarkResult], Optional[DelegateValidation]]:
         delegate = config.delegate.upper() if config.delegate else None
         if not delegate:
-            return None, None
+            # Auto-select fastest delegate that beats CPU
+            cpu_avg = baseline.avg_ms or float("inf")
+            faster = {
+                k: v for k, v in validations.items()
+                if v.status == DelegateStatus.SUPPORTED
+                and v.avg_ms is not None
+                and v.avg_ms < cpu_avg
+            }
+            if not faster:
+                _log("No delegate faster than CPU — using CPU baseline")
+                return None, None
+            delegate = min(faster, key=lambda k: faster[k].avg_ms)
+            _log(f"Auto-selected delegate: {delegate} ({faster[delegate].avg_ms:.2f}ms vs CPU {cpu_avg:.2f}ms)")
         validation = validations.get(delegate)
         if not validation or validation.status != DelegateStatus.SUPPORTED:
             reason = getattr(validation, "reason", None)
