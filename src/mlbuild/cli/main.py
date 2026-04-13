@@ -349,8 +349,10 @@ def diff(build_a, build_b, as_json, ignore_size, ignore_quant, deep):
 @click.option('--signed-app', 'signed_app', default=None,
               type=click.Path(exists=True),
               help='Path to signed MLBuildRunner.app for real iOS device benchmarking.')
+@click.option('--verbose', 'verbose', is_flag=True, default=False,
+              help='Show extended engineering metrics.')
 def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
-              strict_output, platform, udid, signed_app):
+              strict_output, platform, udid, signed_app, verbose):
     """Benchmark a build on current device. Supports CoreML and TFLite formats."""
     from .commands.benchmark import benchmark as benchmark_cmd
     ctx = click.get_current_context()
@@ -366,6 +368,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
         platform=platform,
         udid=udid,
         signed_app=signed_app,
+        verbose=verbose,
     )
 
 @cli.command()

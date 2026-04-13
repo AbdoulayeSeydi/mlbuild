@@ -79,8 +79,10 @@ def _read_global_strict() -> bool:
 @click.option("--signed-app", "signed_app", default=None,
               type=click.Path(exists=True),
               help="Path to signed MLBuildRunner.app for real iOS device.")
+@click.option("--verbose", "verbose", is_flag=True, default=False,
+              help="Show extended engineering metrics.")
 def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
-              strict_output, platform, udid, signed_app):
+              strict_output, platform, udid, signed_app, verbose):
     """
     Benchmark a build on the current device.
     
@@ -141,6 +143,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
                 platform      = platform,
                 udid          = udid,
                 signed_app    = Path(_signed_app) if _signed_app else None,
+                verbose       = verbose,
             )
             return
 
@@ -628,6 +631,7 @@ def _run_device_connected_benchmark(
     platform:     str | None = None,
     udid:         str | None = None,
     signed_app    = None,
+    verbose:      bool = False,
 ) -> None:
     """
     Route a device-connected build to ADB (Android) or idb (iOS) pipeline.
@@ -658,6 +662,7 @@ def _run_device_connected_benchmark(
             warmup        = warmup,
             as_json       = as_json,
             registry      = registry,
+            verbose       = verbose,
         )
     else:
         _run_ios_device_benchmark(
@@ -669,6 +674,7 @@ def _run_device_connected_benchmark(
             registry      = registry,
             udid          = resolved_udid,
             signed_app    = signed_app,
+            verbose       = verbose,
         )
 
 
@@ -681,6 +687,7 @@ def _run_android_device_benchmark(
     warmup:       int,
     as_json:      bool,
     registry,
+    verbose:      bool = False,
 ) -> None:
     """Android ADB pipeline. Extracted from old _run_device_connected_benchmark."""
     from datetime import datetime, timezone
@@ -819,7 +826,7 @@ def _run_android_device_benchmark(
         print(_json.dumps(result.registry_dict, indent=2, default=str))
         return
 
-    _print_android_result_table(view, connected_name, connected_abi, result, device.profile.is_emulator, device.profile.api_level, build=build)
+    _print_android_result_table(view, connected_name, connected_abi, result, device.profile.is_emulator, device.profile.api_level, build=build, verbose=verbose)
 
     if result.recommendation and result.recommendation.kind.value == "rerun":
         sys.exit(2)
@@ -834,6 +841,7 @@ def _run_ios_device_benchmark(
     registry,
     udid:      str | None = None,
     signed_app = None,
+    verbose:   bool = False,
 ) -> None:
     """iOS idb pipeline. Mirrors Android pipeline — same UX, different bridge."""
     from datetime import datetime, timezone
@@ -986,13 +994,13 @@ def _run_ios_device_benchmark(
         print(_json.dumps(result.registry_dict, indent=2, default=str))
         return
 
-    _print_ios_result_table(view, profile, result, runs, build=build)
+    _print_ios_result_table(view, profile, result, runs, build=build, verbose=verbose)
 
     if result.recommendation and result.recommendation.kind.value == "rerun":
         sys.exit(2)
 
 
-def _print_android_result_table(view, connected_name, connected_abi, result, is_emulator=False, api_level=None, build=None) -> None:
+def _print_android_result_table(view, connected_name, connected_abi, result, is_emulator=False, api_level=None, build=None, verbose=False) -> None:
     """Rich result table for Android ADB runs. Extracted from old inline code."""
     table = Table(title="Benchmark Results")
     table.add_column("Metric", style="cyan", no_wrap=True)
@@ -1026,27 +1034,59 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
     android_fps = f"{1000/view.cpu_p50_ms:.1f}" if view.cpu_p50_ms and view.cpu_p50_ms > 0 else "—"
     android_minmax = f"{_f(view.cpu_min_ms)} / {_f(view.cpu_max_ms)}" if view.cpu_min_ms and view.cpu_max_ms else "—"
 
+    # 1. Environment & Config
     table.add_row("Runs",               _fi(view.cpu_count))
     if build:
         table.add_row("Model size",         f"{float(build.size_mb):.2f} MB" if build.size_mb else "—")
         table.add_row("Quantization",       getattr(build, "quantization_type", None) or "—")
     table.add_row("", "")
+    # 2. Primary Performance
+    table.add_row("FPS",                android_fps)
+    table.add_row("Latency (mean)",     _f(view.cpu_avg_ms))
     table.add_row("Latency (p50)",      _f(view.cpu_p50_ms))
     table.add_row("Latency (p95/tail)", _f(view.cpu_p90_ms))
     table.add_row("Latency (p99)",      _f(view.cpu_p99_ms))
     table.add_row("Latency (min/max)",  android_minmax)
-    table.add_row("Latency (mean)",     _f(view.cpu_avg_ms))
-    table.add_row("Latency (std)",      _f(view.cpu_std_ms))
-    table.add_row("FPS",                android_fps)
     table.add_row("", "")
+    # 3. Stability & Efficiency
+    table.add_row("Thermal drift",      thermal_drift_str)
+    table.add_row("Memory (peak)",      _fm(view.cpu_peak_mem_mb))
+    table.add_row("Init time",          _f(view.cpu_init_ms))
     table.add_row("Speedup vs CPU",     f"{view.speedup:.2f}x" if view.speedup else "—")
     if view.delegate and view.delegate != "CPU" and view.cpu_p50_ms:
         table.add_row("CPU baseline (p50)", _f(view.cpu_p50_ms))
     table.add_row("", "")
-    table.add_row("Thermal drift",      thermal_drift_str)
-    table.add_row("Memory (peak)",      _fm(view.cpu_peak_mem_mb))
-    table.add_row("Init time",          _f(view.cpu_init_ms))
+    # 4. Statistical Validation
+    table.add_row("Latency (std)",      _f(view.cpu_std_ms))
     table.add_row("Variance",           _fv(view.cpu_variance))
+    # Autocorrelation and 95% CI
+    import json as _ajson, numpy as _anp
+    _alat = list(getattr(view, "latency_trend", None) or [])
+    if len(_alat) > 1:
+        _aarr = _anp.array(_alat)
+        _aac = float(_anp.corrcoef(_aarr[:-1], _aarr[1:])[0, 1])
+        table.add_row("Autocorrelation",    f"{_aac:.3f}")
+    if len(_alat) >= 20:
+        _arng = _anp.random.default_rng(42)
+        _ameds = [_anp.median(_arng.choice(_alat, len(_alat))) for _ in range(1000)]
+        _acil, _acih = _anp.percentile(_ameds, [2.5, 97.5])
+        table.add_row("95% CI (p50)",       f"[{_acil:.3f}, {_acih:.3f}] ms")
+
+    if verbose:
+        import json as _json, numpy as _np
+        table.add_row("", "")
+        table.add_row("[dim]— Verbose —[/dim]", "")
+        _lat = getattr(view, "latency_trend", None) or []
+        if len(_lat) > 1:
+            _arr = _np.array(_lat)
+            _ac = float(_np.corrcoef(_arr[:-1], _arr[1:])[0, 1])
+            table.add_row("Autocorrelation",    f"{_ac:.3f}")
+        if len(_lat) >= 20:
+            _rng = _np.random.default_rng(42)
+            _medians = [_np.median(_rng.choice(_lat, len(_lat))) for _ in range(1000)]
+            _ci_low, _ci_high = _np.percentile(_medians, [2.5, 97.5])
+            table.add_row("95% CI (p50)",       f"[{_ci_low:.3f}, {_ci_high:.3f}] ms")
+
 
     console.print()
     console.print(table)
@@ -1090,7 +1130,7 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
     console.print(f"[dim]Device: {connected_name} ({connected_abi}) — USB-C[/dim]\n")
 
 
-def _print_ios_result_table(view, profile, result, runs, build=None) -> None:
+def _print_ios_result_table(view, profile, result, runs, build=None, verbose=False) -> None:
     """Rich result table for iOS idb runs. Same column structure as Android."""
     from ...platforms.ios.delegate import DelegateStatus
 
@@ -1135,28 +1175,26 @@ def _print_ios_result_table(view, profile, result, runs, build=None) -> None:
     fps_str = f"{1000/view.cpu_p50_ms:.1f}" if view.cpu_p50_ms and view.cpu_p50_ms > 0 else "—"
     min_max_str = f"{_f(view.cpu_min_ms)} / {_f(view.cpu_max_ms)}" if view.cpu_min_ms and view.cpu_max_ms else "—"
 
+    # 1. Environment & Config
     table.add_row("Device",              target_label if profile.is_simulator else f"{target_label} (USB-C)")
-    table.add_row("Runtime",             "coreml (IDB)")
     table.add_row("iOS",                 profile.ios_version)
-    table.add_row("Compute units req.",  view.compute_units or "—")
-    table.add_row("Compute units used",  view.compute_units_used or "—")
-    table.add_row("Runs",                str(runs))
+    table.add_row("Runtime",             "coreml (IDB)")
     if build:
         table.add_row("Model size",          f"{float(build.size_mb):.2f} MB" if build.size_mb else "—")
         table.add_row("Quantization",        getattr(build, "quantization_type", None) or "—")
+    table.add_row("Compute units req.",  view.compute_units or "—")
+    table.add_row("Compute units used",  view.compute_units_used or "—")
+    table.add_row("Runs",                str(runs))
     table.add_row("", "")
+    # 2. Primary Performance
+    table.add_row("FPS",                 fps_str)
+    table.add_row("Latency (mean)",      _f(view.cpu_avg_ms))
     table.add_row("Latency (p50)",       _f(view.cpu_p50_ms))
     table.add_row("Latency (p95/tail)",  _f(view.cpu_p90_ms))
     table.add_row("Latency (p99)",       _f(view.cpu_p99_ms))
     table.add_row("Latency (min/max)",   min_max_str)
-    table.add_row("Latency (mean)",      _f(view.cpu_avg_ms))
-    table.add_row("Latency (std)",       _f(view.cpu_std_ms))
-    table.add_row("FPS",                 fps_str)
     table.add_row("", "")
-    table.add_row("Speedup vs CPU",      f"{view.speedup:.2f}x" if view.speedup else "—")
-    if view.delegate and view.delegate != "CPU" and view.cpu_p50_ms:
-        table.add_row("CPU baseline (p50)", _f(view.cpu_p50_ms))
-    table.add_row("", "")
+    # 3. Stability & Efficiency
     table.add_row("Thermal drift",       thermal_str)
     if not profile.is_simulator and view.thermal_score and view.thermal_score.latency_drift_pct is not None:
         pct = view.thermal_score.latency_drift_pct * 100
@@ -1164,7 +1202,52 @@ def _print_ios_result_table(view, profile, result, runs, build=None) -> None:
         table.add_row("Latency drift",       f"{sign}{pct:.1f}%")
     table.add_row("Memory (peak)",       _fm(view.cpu_peak_mem_mb))
     table.add_row("Init time",           _f(view.cpu_init_ms))
+    table.add_row("Speedup vs CPU",      f"{view.speedup:.2f}x" if view.speedup else "—")
+    if view.delegate and view.delegate != "CPU" and view.cpu_p50_ms:
+        table.add_row("CPU baseline (p50)", _f(view.cpu_p50_ms))
+    table.add_row("", "")
+    # 4. Statistical Validation
+    table.add_row("Latency (std)",       _f(view.cpu_std_ms))
+    # Autocorrelation and 95% CI — always shown
+    import json as _json2, numpy as _np2
+    _lat2 = []
+    for _line2 in (view.cpu_raw_stdout or "").splitlines():
+        _line2 = _line2.strip()
+        if _line2.startswith("{"):
+            try:
+                _obj2 = _json2.loads(_line2)
+                if _obj2.get("event") == "run" and "latency_ms" in _obj2:
+                    _lat2.append(float(_obj2["latency_ms"]))
+            except Exception:
+                pass
+    if len(_lat2) > 1:
+        _arr2 = _np2.array(_lat2)
+        _ac2 = float(_np2.corrcoef(_arr2[:-1], _arr2[1:])[0, 1])
+        table.add_row("Autocorrelation",     f"{_ac2:.3f}")
+    if len(_lat2) >= 20:
+        _rng2 = _np2.random.default_rng(42)
+        _meds2 = [_np2.median(_rng2.choice(_lat2, len(_lat2))) for _ in range(1000)]
+        _cil2, _cih2 = _np2.percentile(_meds2, [2.5, 97.5])
+        table.add_row("95% CI (p50)",        f"[{_cil2:.3f}, {_cih2:.3f}] ms")
     table.add_row("Variance",            _fv(view.cpu_variance))
+
+    if verbose:
+        import json as _json, numpy as _np
+        table.add_row("", "")
+        table.add_row("[dim]— Verbose —[/dim]", "")
+        # Extract per-run latencies from raw stdout JSON events
+        _lat = []
+        for _line in (view.cpu_raw_stdout or "").splitlines():
+            _line = _line.strip()
+            if _line.startswith("{"):
+                try:
+                    _obj = _json.loads(_line)
+                    if _obj.get("event") == "run" and "latency_ms" in _obj:
+                        _lat.append(float(_obj["latency_ms"]))
+                except Exception:
+                    pass
+        if view.cpu_raw_stdout:
+            table.add_row("Stdout lines",        str(len(view.cpu_raw_stdout.splitlines())))
 
     console.print()
     console.print(table)
