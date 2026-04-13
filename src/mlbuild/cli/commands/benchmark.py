@@ -32,6 +32,20 @@ console = Console(width=None)
 
 
 # --- PATCH: shared helper (mirrors build.py) ---
+def _read_signed_app_from_config() -> str | None:
+    """Read ios.signed_app from .mlbuild/config.toml if present."""
+    try:
+        config_path = Path(".mlbuild/config.toml")
+        if not config_path.exists():
+            return None
+        import tomllib
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        return data.get("ios", {}).get("signed_app")
+    except Exception:
+        return None
+
+
 def _read_global_strict() -> bool:
     """Read [validation] strict_output from .mlbuild/config.toml if present."""
     try:
@@ -114,6 +128,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
         
         # Inside the device-connected routing block — replace the existing call:
         if "device-connected" in (build.target_device or ""):
+            _signed_app = signed_app or _read_signed_app_from_config()
             _run_device_connected_benchmark(
                 build         = build,
                 build_abi     = getattr(build, "device_abi", None),
@@ -125,7 +140,7 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
                 registry      = registry,
                 platform      = platform,
                 udid          = udid,
-                signed_app    = Path(signed_app) if signed_app else None,
+                signed_app    = Path(_signed_app) if _signed_app else None,
             )
             return
 
@@ -899,9 +914,9 @@ def _run_ios_device_benchmark(
     except UnsignedBinaryError:
         console.print(
             "\n[red]Real device benchmarking requires a signed MLBuildRunner.app.[/red]\n"
-            "See: [link]mlbuild.dev/ios-signing[/link]\n"
-            "Use [bold]--signed-app <path>[/bold] to provide your signed build,\n"
-            "or run against a Simulator instead.\n"
+            "Provide it once with [bold]--signed-app <path>[/bold], then save it:\n\n"
+            "  [dim]echo -e \'[ios]\\nsigned_app = \"<path>\"\'  >> .mlbuild/config.toml[/dim]\n\n"
+            "After that, [bold]mlbuild benchmark <id>[/bold] will work with no extra flags.\n"
         )
         sys.exit(1)
     except Exception as exc:
