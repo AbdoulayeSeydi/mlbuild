@@ -1018,12 +1018,14 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
         sign = "+" if pct >= 0 else ""
         thermal_drift_str += f"  ({sign}{pct:.1f}% latency drift)"
 
-    device_label = f"{connected_name} [EMULATOR]" if is_emulator else f"{connected_name}"
+    device_label = f"{connected_name} [EMULATOR]" if is_emulator else f"{connected_name} (USB-C)"
+    delegate_label = view.delegate if view.delegate and view.delegate != "CPU" else "CPU"
+    compute_used = getattr(view, "delegate", "CPU") if view.speedup else "CPU"
     table.add_row("Device",             device_label)
     table.add_row("Runtime",            "tflite (ADB)")
     table.add_row("Android",            f"API {api_level}" if api_level else "—")
-    table.add_row("Compute units req.", "cpuOnly")
-    table.add_row("Compute units used", "CPU")
+    table.add_row("Compute units req.", delegate_label)
+    table.add_row("Compute units used", compute_used)
     table.add_row("Runs",               _fi(view.cpu_count))
     table.add_row("", "")
     table.add_row("Latency (p50)",      _f(view.cpu_p50_ms))
@@ -1049,18 +1051,35 @@ def _print_android_result_table(view, connected_name, connected_abi, result, is_
         score_str = f" (score={score:.3f})" if score is not None else ""
         console.print(f"  Stability: [{color}]{band.upper()}[/{color}]{score_str}")
 
+    # Delegate status table
+    if view.delegate and view.delegate != "CPU" and view.delegate_status is not None:
+        from ...platforms.android.delegate import DelegateStatus as _DS
+        status_color = {
+            "supported":   "green",
+            "fallback":    "yellow",
+            "unsupported": "red",
+            "inconsistent":"red",
+            "skipped":     "dim",
+        }.get(view.delegate_status.value, "white")
+        dtable = Table(title="Delegate Status", show_header=True)
+        dtable.add_column("Delegate", style="cyan")
+        dtable.add_column("Status", justify="right")
+        dtable.add_row(view.delegate, f"[{status_color}]{view.delegate_status.value.upper()}[/{status_color}]")
+        console.print(dtable)
+        console.print()
+
     rec = result.recommendation
     KIND_STYLES = {
-        "use_cpu":  ("blue",   "→"),
-        "rerun":    ("yellow", "⚠"),
+        "use_cpu":          ("blue",   "→"),
+        "rerun":            ("yellow", "⚠"),
+        "use_delegate":     ("green",  "✓"),
+        "exclude_delegate": ("red",    "✗"),
     }
     color, icon = KIND_STYLES.get(rec.kind.value, ("white", "•"))
     console.print(f"\n  [{color}]{icon} {rec.message}[/{color}]")
     console.print()
     console.print("[green]✓ Benchmark saved to registry[/green]")
-    console.print(
-        f"[dim]Device: {connected_name} ({connected_abi}) — USB-C[/dim]\n"
-    )
+    console.print(f"[dim]Device: {connected_name} ({connected_abi}) — USB-C[/dim]\n")
 
 
 def _print_ios_result_table(view, profile, result, runs) -> None:
