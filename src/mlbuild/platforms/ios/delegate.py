@@ -285,16 +285,18 @@ def _run_mini_benchmark(
         start = time.time()
 
         while True:
-            chunk = proc.stdout.read(512) or ""
-            if not chunk and proc.poll() is not None:
-                break
-            stdout_lines.extend(chunk.splitlines())
-
-            if time.time() - start > timeout:
-                _log("Mini benchmark timed out — killing", deployed.udid, "WARN")
-                proc.kill()
-                proc.communicate()
-                return None, None, "\n".join(stdout_lines)
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                if time.time() - start > timeout:
+                    _log("Mini benchmark timed out — killing", deployed.udid, "WARN")
+                    proc.kill()
+                    proc.communicate()
+                    return None, None, "\n".join(stdout_lines)
+                continue
+            stdout_lines.append(line.rstrip())
+            _log(f"mini: {line.rstrip()}", deployed.udid)
 
         proc.wait()
         stdout = "\n".join(stdout_lines)
@@ -314,6 +316,16 @@ def _run_mini_benchmark(
 
 
 def _parse_avg_ms(stdout: str) -> Optional[float]:
+    import json as _json
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                obj = _json.loads(line)
+                if obj.get("event") == "result" and "avg_ms" in obj:
+                    return float(obj["avg_ms"])
+            except Exception:
+                pass
     match = re.search(r"avg_ms:\s*(\d+\.?\d*)", stdout, re.IGNORECASE)
     if match:
         try:
@@ -326,13 +338,18 @@ def _parse_avg_ms(stdout: str) -> Optional[float]:
 def _parse_compute_units_used(stdout: str) -> Optional[str]:
     """
     Parse what CoreML actually ran on from runner output.
-
-    Expected runner line:
-        compute_units_used: cpuAndGPU
-
-    This is the ground truth — CoreML can silently fall back to CPU
-    even when .all is requested.
+    Primary: JSON result event. Fallback: flat text.
     """
+    import json as _json
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                obj = _json.loads(line)
+                if obj.get("event") == "result" and "compute_units_used" in obj:
+                    return obj["compute_units_used"]
+            except Exception:
+                pass
     for line in stdout.splitlines():
         line = line.strip().lower()
         if line.startswith("compute_units_used:"):

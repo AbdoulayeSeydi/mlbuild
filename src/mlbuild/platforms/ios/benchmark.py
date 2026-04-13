@@ -497,30 +497,45 @@ def _parse_benchmark_output(
         run_latency_ms: 12.34    (one per run)
         op_stat: Conv2D avg_ms=1.23 pct=34.5
     """
-    avg_ms      = _parse_float(r"avg_ms:\s*(\d+\.?\d*)", stdout)
-    p50_ms      = _parse_float(r"p50_ms:\s*(\d+\.?\d*)", stdout)
-    p90_ms      = _parse_float(r"p90_ms:\s*(\d+\.?\d*)", stdout)
-    p99_ms      = _parse_float(r"p99_ms:\s*(\d+\.?\d*)", stdout)
-    init_ms     = _parse_float(r"init_ms:\s*(\d+\.?\d*)", stdout)
-    peak_mem_mb = _parse_float(r"peak_memory_mb:\s*(\d+\.?\d*)", stdout)
+    import json as _json
 
-    # compute_units_used — CoreML ground truth
+    avg_ms = p50_ms = p90_ms = p99_ms = init_ms = peak_mem_mb = None
     compute_units_used: Optional[str] = None
-    for line in stdout.splitlines():
-        line = line.strip().lower()
-        if line.startswith("compute_units_used:"):
-            _, _, raw = line.partition(":")
-            compute_units_used = raw.strip()
-            break
-
-    # thermal_state — raw string, thermal.py interprets
     thermal_state: Optional[str] = None
+
+    # Primary: JSON result event
     for line in stdout.splitlines():
-        line = line.strip().lower()
-        if line.startswith("thermal_state:"):
-            _, _, raw = line.partition(":")
-            thermal_state = raw.strip()
-            break
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                obj = _json.loads(line)
+                if obj.get("event") == "result":
+                    avg_ms             = obj.get("avg_ms")
+                    p50_ms             = obj.get("p50_ms")
+                    p90_ms             = obj.get("p90_ms")
+                    p99_ms             = obj.get("p99_ms")
+                    init_ms            = obj.get("init_ms")
+                    peak_mem_mb        = obj.get("peak_memory_mb")
+                    compute_units_used = obj.get("compute_units_used")
+                    thermal_state      = obj.get("thermal_state")
+                    break
+            except Exception:
+                pass
+
+    # Fallback: flat text
+    if avg_ms is None:
+        avg_ms      = _parse_float(r"avg_ms:\s*(\d+\.?\d*)", stdout)
+        p50_ms      = _parse_float(r"p50_ms:\s*(\d+\.?\d*)", stdout)
+        p90_ms      = _parse_float(r"p90_ms:\s*(\d+\.?\d*)", stdout)
+        p99_ms      = _parse_float(r"p99_ms:\s*(\d+\.?\d*)", stdout)
+        init_ms     = _parse_float(r"init_ms:\s*(\d+\.?\d*)", stdout)
+        peak_mem_mb = _parse_float(r"peak_memory_mb:\s*(\d+\.?\d*)", stdout)
+        for line in stdout.splitlines():
+            l = line.strip().lower()
+            if l.startswith("compute_units_used:"):
+                compute_units_used = l.partition(":")[2].strip()
+            if l.startswith("thermal_state:"):
+                thermal_state = l.partition(":")[2].strip()
 
     variance: Optional[float] = None
     if p50_ms and p90_ms and p50_ms > 0:
