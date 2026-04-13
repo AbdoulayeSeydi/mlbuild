@@ -180,8 +180,8 @@ def _ensure_app_installed(
         else:
             installed = idb.list_apps(udid=udid, bundle_id=BUNDLE_ID)
         if BUNDLE_ID in installed:
-            _log(f"Runner app already installed: {BUNDLE_ID}")
-            return
+            _log(f"Runner app already installed: {BUNDLE_ID} — reinstalling fresh")
+            # Don't skip — always install fresh since we uninstall after each run
     except Exception as exc:
         _log(f"list_apps failed — proceeding with install: {exc}")
 

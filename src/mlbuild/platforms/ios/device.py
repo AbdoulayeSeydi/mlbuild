@@ -44,7 +44,7 @@ from typing import Dict, Optional, Tuple
 from mlbuild.platforms.ios import idb
 from mlbuild.platforms.ios.introspect import DeviceProfile, build_profile
 from mlbuild.platforms.ios.thermal import capture_snapshot, compute_thermal_score
-from mlbuild.platforms.ios.deploy import deploy, cleanup, DeployedRun
+from mlbuild.platforms.ios.deploy import deploy, cleanup, DeployedRun, BUNDLE_ID
 from mlbuild.platforms.ios.baseline import run_cpu_baseline, BaselineResult
 from mlbuild.platforms.ios.delegate import (
     validate_delegates,
@@ -513,6 +513,19 @@ class IDBDevice:
             )
         except Exception as exc:
             _log(f"Cleanup failed (non-fatal): {exc}", "WARN")
+
+        # Uninstall app from real device after benchmark — no trace left
+        if not deployed.is_simulator and deployed.udid:
+            try:
+                import subprocess as _sp
+                _sp.run(
+                    ["xcrun", "devicectl", "device", "uninstall", "app",
+                     "--device", deployed.udid, BUNDLE_ID],
+                    capture_output=True, timeout=30,
+                )
+                _log("App uninstalled from device")
+            except Exception as exc:
+                _log(f"App uninstall failed (non-fatal): {exc}", "WARN")
 
     def __str__(self) -> str:
         sim = " [SIMULATOR]" if self._profile.is_simulator else ""
