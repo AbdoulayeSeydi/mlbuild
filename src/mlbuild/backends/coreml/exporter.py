@@ -258,6 +258,44 @@ class ModelIngestion:
 # Layer 2: CoreML Optimization
 # ============================================================
 
+
+# Phone name → internal chip target
+PHONE_NAME_TO_TARGET = {
+    # iPhone 16 series — A18
+    "iphone_16_pro_max": "apple_a18",
+    "iphone_16_pro":     "apple_a18",
+    "iphone_16_plus":    "apple_a18",
+    "iphone_16":         "apple_a18",
+    # iPhone 15 series
+    "iphone_15_pro_max": "apple_a17",
+    "iphone_15_pro":     "apple_a17",
+    "iphone_15_plus":    "apple_a16",
+    "iphone_15":         "apple_a16",
+    # iPhone 14 series
+    "iphone_14_pro_max": "apple_a16",
+    "iphone_14_pro":     "apple_a16",
+    "iphone_14_plus":    "apple_a15",
+    "iphone_14":         "apple_a15",
+    # iPhone 13 series
+    "iphone_13_pro_max": "apple_a15",
+    "iphone_13_pro":     "apple_a15",
+    "iphone_13_mini":    "apple_a15",
+    "iphone_13":         "apple_a15",
+    # iPhone 12 series
+    "iphone_12_pro_max": "apple_a14",
+    "iphone_12_pro":     "apple_a14",
+    "iphone_12_mini":    "apple_a14",
+    "iphone_12":         "apple_a14",
+    # Mac
+    "mac_m3": "apple_m3",
+    "mac_m2": "apple_m2",
+    "mac_m1": "apple_m1",
+}
+
+def resolve_target(target: str) -> str:
+    """Resolve phone name to internal chip target."""
+    return PHONE_NAME_TO_TARGET.get(target.lower(), target)
+
 class CoreMLExporter:
     """
     Modern CoreML exporter with full reproducibility tracking.

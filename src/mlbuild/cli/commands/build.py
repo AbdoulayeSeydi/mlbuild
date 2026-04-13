@@ -418,9 +418,20 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json):
     "--target",
     required=True,
     type=click.Choice([
-        "apple_a18", "apple_a17", "apple_a16", "apple_a15",
+        # iPhone models (recommended)
+        "iphone_16_pro_max", "iphone_16_pro", "iphone_16_plus", "iphone_16",
+        "iphone_15_pro_max", "iphone_15_pro", "iphone_15_plus", "iphone_15",
+        "iphone_14_pro_max", "iphone_14_pro", "iphone_14_plus", "iphone_14",
+        "iphone_13_pro_max", "iphone_13_pro", "iphone_13_mini", "iphone_13",
+        "iphone_12_pro_max", "iphone_12_pro", "iphone_12_mini", "iphone_12",
+        # Mac
+        "mac_m3", "mac_m2", "mac_m1",
+        # Android (ABI-based)
+        "android_arm64", "android_arm32",
+        # Legacy chip targets (kept for CI compatibility)
+        "apple_a18", "apple_a17", "apple_a16", "apple_a15", "apple_a14",
         "apple_m3", "apple_m2", "apple_m1",
-        "android_arm64", "android_arm32", "raspberry_pi",
+        # Auto-detect
         "device-connected",
     ]),
 )
@@ -800,17 +811,33 @@ def build(
             except Exception:
                 pass
 
-            # No Android device — assume iOS (IDB not yet wired)
-            # Default to apple_a17 until IDB device detection is added
-            console.print(
-                "[yellow]⚠  No iOS device detected via IDB.[/yellow]\n"
-                "Defaulting to apple_a17 target.\n"
-                "When IDB is connected, the actual device target will be used.\n"
-            )
+            # Detect connected iPhone chip via devicectl
             original_target = target
-            target = "apple_a17"
+            try:
+                from mlbuild.platforms.ios import idb as _idb
+                from mlbuild.platforms.ios.chip_map import CHIP_MAP as _CHIP_MAP
+                _idb.ensure_companion()
+                _info = _idb.describe()
+                _model = _info.get("model", "")
+                _chip = _CHIP_MAP.get(_model, "")
+                _chip_to_target = {
+                    "A18 Pro": "apple_a18", "A18": "apple_a18",
+                    "A17 Pro": "apple_a17",
+                    "A16 Bionic": "apple_a16",
+                    "A15 Bionic": "apple_a15",
+                    "A14 Bionic": "apple_a14",
+                }
+                target = _chip_to_target.get(_chip, "apple_a17")
+                console.print(f"  Detected: [bold]{_info.get('name', 'iPhone')}[/bold] ({_chip}) → target={target}\n")
+            except Exception as exc:
+                console.print(f"[yellow]⚠  Could not detect iPhone chip ({exc}) — defaulting to apple_a17[/yellow]\n")
+                target = "apple_a17"
 
         # Convert
+        # Resolve phone name to chip target
+        from mlbuild.backends.coreml.exporter import resolve_target as _resolve_target
+        target = _resolve_target(target)
+
         with tempfile.TemporaryDirectory() as tmp_root:
             tmp_root = Path(tmp_root)
             import io, contextlib
