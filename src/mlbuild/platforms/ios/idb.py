@@ -295,7 +295,11 @@ def run(
 # Device Discovery
 # ---------------------------------------------------------------------
 
-IDB_COMPANION_BIN = "/Users/abdoulayeseydi/idb/build/Build/Products/Release/idb_companion"
+import shutil as _shutil
+IDB_COMPANION_BIN = (
+    _shutil.which("idb_companion")
+    or "/usr/local/bin/idb_companion"
+)
 
 
 def list_targets() -> list[tuple[str, str, str]]:

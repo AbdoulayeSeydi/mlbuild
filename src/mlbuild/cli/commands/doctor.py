@@ -133,7 +133,8 @@ def check_device_toolchain() -> dict:
         results["simctl"] = None
 
     # idb_companion
-    IDB_PATH = "/Users/abdoulayeseydi/idb/build/Build/Products/Release/idb_companion"
+    import shutil as _shutil
+    IDB_PATH = _shutil.which("idb_companion") or "/usr/local/bin/idb_companion"
     try:
         r = subprocess.run([IDB_PATH, "--version"], capture_output=True, text=True, timeout=5)
         results["idb_companion"] = "available" if r.returncode == 0 else None
