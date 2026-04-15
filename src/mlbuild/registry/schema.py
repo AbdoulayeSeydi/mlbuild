@@ -30,9 +30,14 @@ v6 changes:
 # - Added cached benchmark columns: cached_latency_p50_ms, cached_latency_p95_ms,
 #   cached_memory_peak_mb.
 
+# v12 changes:
+# - Added 6 new metric columns to accuracy_checks:
+#   rmse, kl_divergence, js_divergence, error_p50, error_p95, error_p99.
+#   All nullable — existing rows unaffected.
+
 from __future__ import annotations
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -302,7 +307,7 @@ CREATE INDEX IF NOT EXISTS idx_builds_variant_id
 
 
 -- ============================================================
--- Accuracy Checks (v8)
+-- Accuracy Checks (v8, extended v12)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS accuracy_checks (
@@ -317,6 +322,15 @@ CREATE TABLE IF NOT EXISTS accuracy_checks (
     seed                INTEGER NOT NULL,
     passed              INTEGER NOT NULL CHECK (passed IN (0, 1)),
     created_at          TEXT NOT NULL,
+
+    -- v12: extended metrics
+    rmse          REAL,
+    kl_divergence REAL,
+    js_divergence REAL,
+    error_p50     REAL,
+    error_p95     REAL,
+    error_p99     REAL,
+
     FOREIGN KEY(baseline_build_id) REFERENCES builds(build_id),
     FOREIGN KEY(candidate_build_id) REFERENCES builds(build_id)
 );
@@ -331,8 +345,7 @@ CREATE INDEX IF NOT EXISTS idx_accuracy_pair
     ON accuracy_checks(baseline_build_id, candidate_build_id);
 
 
-
-    -- ============================================================
+-- ============================================================
 -- Command Log (v9)
 -- History of every CLI command ever run.
 -- Decoupled from builds/benchmarks — deleting history never
@@ -393,7 +406,7 @@ WHERE id = 1;
 
 
 # ============================================================
-# Migration: v5 → v6  [ADDED]
+# Migration: v5 → v6
 # ============================================================
 
 MIGRATION_V5_TO_V6 = """
@@ -544,17 +557,34 @@ WHERE id = 1;
 """
 
 # ============================================================
+# Migration: v11 → v12
+# ============================================================
+
+MIGRATION_V11_TO_V12 = """
+ALTER TABLE accuracy_checks ADD COLUMN rmse          REAL;
+ALTER TABLE accuracy_checks ADD COLUMN kl_divergence REAL;
+ALTER TABLE accuracy_checks ADD COLUMN js_divergence REAL;
+ALTER TABLE accuracy_checks ADD COLUMN error_p50     REAL;
+ALTER TABLE accuracy_checks ADD COLUMN error_p95     REAL;
+ALTER TABLE accuracy_checks ADD COLUMN error_p99     REAL;
+
+UPDATE schema_version SET version = 12, applied_at = datetime('now')
+WHERE id = 1;
+"""
+
+# ============================================================
 # Migration registry — ordered list of all migrations
 # ============================================================
 
 MIGRATIONS: list[tuple[int, int, str]] = [
-    (4, 5, MIGRATION_V4_TO_V5),
-    (5, 6, MIGRATION_V5_TO_V6),
-    (6, 7, MIGRATION_V6_TO_V7),
-    (7, 8, MIGRATION_V7_TO_V8),
-    (8, 9, MIGRATION_V8_TO_V9),
-    (9, 10, MIGRATION_V9_TO_V10),
+    (4,  5,  MIGRATION_V4_TO_V5),
+    (5,  6,  MIGRATION_V5_TO_V6),
+    (6,  7,  MIGRATION_V6_TO_V7),
+    (7,  8,  MIGRATION_V7_TO_V8),
+    (8,  9,  MIGRATION_V8_TO_V9),
+    (9,  10, MIGRATION_V9_TO_V10),
     (10, 11, MIGRATION_V10_TO_V11),
+    (11, 12, MIGRATION_V11_TO_V12),
 ]
 
 

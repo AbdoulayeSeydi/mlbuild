@@ -6,20 +6,32 @@ Metrics
 cosine_similarity   Primary gate. Scale-invariant direction preservation.
 mean_abs_error      Diagnostic. Distributed error signal.
 max_abs_error       Diagnostic. Outlier detector. Never gates.
+rmse                Optional gate. Penalizes outliers more than MAE.
 top1_agreement      Conditional gate. For classification logits [batch, N], N > 1.
+kl_divergence       Diagnostic. KL(baseline || candidate). Classifiers only. Never gates.
+js_divergence       Diagnostic. Jensen-Shannon divergence. Bounded [0, ln2]. Never gates.
+error_p50/p95/p99   Diagnostic. Percentile breakdown of absolute error. Never gates.
 
 Design principles
 -----------------
-• Deterministic output ordering
-• Strict structural validation
-• Flatten outputs once
-• Vectorized metric computation
-• NaN / Inf protection
+- Deterministic output ordering
+- Strict structural validation
+- Flatten outputs once
+- Vectorized metric computation
+- NaN / Inf protection
+
+KL/JS stability contract
+------------------------
+- Inputs are softmax-normalized via log-sum-exp before KL/JS computation.
+- Distributions are epsilon-clipped to [1e-10, 1] after normalization.
+- KL direction is fixed: KL(baseline || candidate). Never reversed.
+- JS divergence is symmetric: 0.5*KL(p||m) + 0.5*KL(q||m), m = 0.5*(p+q).
+- Both return None if never activated (non-classifier outputs).
 """
 
 from __future__ import annotations
 
-from typing import Optional, Iterable
+from typing import Optional
 import numpy as np
 
 
@@ -85,7 +97,6 @@ def _flatten_outputs(
 
     n_samples = len(baseline)
 
-    # compute total feature width
     width = sum(int(np.prod(baseline[0][k].shape)) for k in keys)
 
     dtype = np.result_type(
@@ -118,6 +129,41 @@ def _flatten_outputs(
 
 
 # ============================================================
+# KL/JS shared helpers
+# ============================================================
+
+_KL_EPS = 1e-10
+
+
+def _log_softmax_to_prob(x: np.ndarray) -> np.ndarray:
+    """
+    Numerically stable softmax via log-sum-exp, then epsilon-clipped.
+    Input x is a 1D float array (logits or raw scores).
+    Returns a valid probability distribution summing to ~1.
+    """
+    x = x.astype(np.float64)
+    shifted = x - np.max(x)                        # log-sum-exp stability
+    probs = np.exp(shifted) / np.sum(np.exp(shifted))
+    return np.clip(probs, _KL_EPS, 1.0)
+
+
+def _kl_div(p: np.ndarray, q: np.ndarray) -> float:
+    """
+    KL(p || q). Both inputs must already be valid probability distributions.
+    Direction is fixed: baseline=p, candidate=q. Never reversed.
+    """
+    return float(np.sum(p * np.log(p / q)))
+
+
+def _js_div(p: np.ndarray, q: np.ndarray) -> float:
+    """
+    Jensen-Shannon divergence. Symmetric. Bounded [0, ln2].
+    """
+    m = 0.5 * (p + q)
+    return float(0.5 * _kl_div(p, m) + 0.5 * _kl_div(q, m))
+
+
+# ============================================================
 # Cosine similarity
 # ============================================================
 
@@ -128,22 +174,16 @@ def cosine_similarity(
 
     baseline, candidate, _ = _flatten_outputs(baseline_outputs, candidate_outputs)
 
-    dot = np.sum(baseline * candidate, axis=1)
-
+    dot    = np.sum(baseline * candidate, axis=1)
     norm_b = np.linalg.norm(baseline, axis=1)
     norm_c = np.linalg.norm(candidate, axis=1)
-
-    denom = norm_b * norm_c
-
-    valid = denom > 1e-12
+    denom  = norm_b * norm_c
+    valid  = denom > 1e-12
 
     if not np.any(valid):
-        # both vectors zero → perfect agreement
         return 1.0
 
-    sims = dot[valid] / denom[valid]
-
-    return float(np.mean(sims))
+    return float(np.mean(dot[valid] / denom[valid]))
 
 
 # ============================================================
@@ -156,7 +196,6 @@ def mean_abs_error(
 ) -> float:
 
     baseline, candidate, _ = _flatten_outputs(baseline_outputs, candidate_outputs)
-
     return float(np.mean(np.abs(baseline - candidate)))
 
 
@@ -170,7 +209,6 @@ def max_abs_error(
 ) -> float:
 
     baseline, candidate, _ = _flatten_outputs(baseline_outputs, candidate_outputs)
-
     return float(np.max(np.abs(baseline - candidate)))
 
 
@@ -184,26 +222,18 @@ def _detect_logits(
 ) -> Optional[str]:
     """
     Detect classification logits output key.
-
-    Returns key name if logits detected.
+    Returns key name if logits detected, None otherwise.
     """
-
     if not baseline:
         return None
-
     if len(baseline[0]) != 1:
         return None
-
     key = next(iter(baseline[0]))
-
     arr = baseline[0][key]
-
     if arr.ndim != 2:
         return None
-
     if arr.shape[1] <= 1:
         return None
-
     return key
 
 
@@ -213,11 +243,9 @@ def top1_agreement(
 ) -> Optional[float]:
     """
     Fraction of samples where argmax matches.
-    Returns value in [0,1].
+    Returns value in [0, 1], or None if not a classifier output.
     """
-
     key = _detect_logits(baseline_outputs, candidate_outputs)
-
     if key is None:
         return None
 
@@ -227,9 +255,7 @@ def top1_agreement(
     b = b.reshape(b.shape[0], -1)
     c = c.reshape(c.shape[0], -1)
 
-    matches = np.argmax(b, axis=1) == np.argmax(c, axis=1)
-
-    return float(np.mean(matches))
+    return float(np.mean(np.argmax(b, axis=1) == np.argmax(c, axis=1)))
 
 
 # ============================================================
@@ -238,7 +264,7 @@ def top1_agreement(
 
 class CosineAccumulator:
     def __init__(self):
-        self._dots = []
+        self._dots   = []
         self._norm_b = []
         self._norm_c = []
 
@@ -284,7 +310,7 @@ class MaxAEAccumulator:
 
 class Top1Accumulator:
     """
-    Only active when output is 2D [1, N] with N > 1.
+    Only active when output is 1D with more than 1 element.
     Returns None if never activated.
     """
     def __init__(self):
@@ -293,9 +319,8 @@ class Top1Accumulator:
         self._active  = False
 
     def update(self, b: np.ndarray, c: np.ndarray) -> None:
-        # b/c here are the raw per-output arrays (already batch-stripped by _validate_outputs)
         if b.ndim == 1 and b.shape[0] > 1:
-            self._active = True
+            self._active   = True
             self._matches += int(np.argmax(b) == np.argmax(c))
             self._total   += 1
 
@@ -303,3 +328,101 @@ class Top1Accumulator:
         if not self._active or self._total == 0:
             return None
         return self._matches / self._total
+
+
+class RMSEAccumulator:
+    """
+    Root mean squared error across all output elements.
+    Optional gate via config.rmse_threshold.
+    """
+    def __init__(self):
+        self._sq_total = 0.0
+        self._count    = 0
+
+    def update(self, b: np.ndarray, c: np.ndarray) -> None:
+        diff = (b.astype(np.float64) - c.astype(np.float64))
+        self._sq_total += float(np.sum(diff ** 2))
+        self._count    += b.size
+
+    def compute(self) -> float:
+        if self._count == 0:
+            return 0.0
+        return float(np.sqrt(self._sq_total / self._count))
+
+
+class KLDivAccumulator:
+    """
+    KL divergence: KL(baseline || candidate). Direction fixed, never reversed.
+
+    Only meaningful for classifier outputs (probability vectors).
+    Caller is responsible for activating only when task_type is a classifier.
+
+    Numerical stability contract:
+    - Inputs softmax-normalized via log-sum-exp internally.
+    - Distributions epsilon-clipped to [1e-10, 1] after normalization.
+    - Operates in float64 throughout.
+
+    Returns None if never updated.
+    """
+    def __init__(self):
+        self._values: list[float] = []
+
+    def update(self, b: np.ndarray, c: np.ndarray) -> None:
+        p = _log_softmax_to_prob(b.reshape(-1))
+        q = _log_softmax_to_prob(c.reshape(-1))
+        self._values.append(_kl_div(p, q))
+
+    def compute(self) -> float | None:
+        if not self._values:
+            return None
+        return float(np.mean(self._values))
+
+
+class JSDivAccumulator:
+    """
+    Jensen-Shannon divergence. Symmetric. Bounded [0, ln2 ≈ 0.693].
+
+    Same activation contract as KLDivAccumulator — caller guards on task_type.
+    Same numerical stability contract as KLDivAccumulator.
+
+    Returns None if never updated.
+    """
+    def __init__(self):
+        self._values: list[float] = []
+
+    def update(self, b: np.ndarray, c: np.ndarray) -> None:
+        p = _log_softmax_to_prob(b.reshape(-1))
+        q = _log_softmax_to_prob(c.reshape(-1))
+        self._values.append(_js_div(p, q))
+
+    def compute(self) -> float | None:
+        if not self._values:
+            return None
+        return float(np.mean(self._values))
+
+
+class PercentileAEAccumulator:
+    """
+    Percentile breakdown of absolute error: p50, p95, p99.
+
+    Stores all absolute error values across all updates.
+    Memory justified: 32 samples * typical output width stays well
+    under 1MB. Not intended for sample counts above ~10k.
+
+    Returns (p50, p95, p99) tuple. Never gates CI.
+    """
+    def __init__(self):
+        self._errors: list[np.ndarray] = []
+
+    def update(self, b: np.ndarray, c: np.ndarray) -> None:
+        self._errors.append(np.abs(b.astype(np.float64) - c.astype(np.float64)).reshape(-1))
+
+    def compute(self) -> tuple[float, float, float]:
+        if not self._errors:
+            return (0.0, 0.0, 0.0)
+        all_errors = np.concatenate(self._errors)
+        return (
+            float(np.percentile(all_errors, 50)),
+            float(np.percentile(all_errors, 95)),
+            float(np.percentile(all_errors, 99)),
+        )

@@ -114,16 +114,18 @@ class LocalRegistry:
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # DON'T call _init_db() here - only verify it exists
         if not self.db_path.exists():
             raise InternalError(
                 f"Registry not initialized. Run 'mlbuild init' first.\n"
                 f"Expected database at: {self.db_path}"
             )
 
+        # Auto-migrate on every open — no-op if schema is current
+        self._migrate()
+
     def init_schema(self) -> None:
         """Initialize database schema. Called only by 'mlbuild init'."""
-        from .schema import SCHEMA_VERSION, SCHEMA_SQL, get_migration
+        from .schema import SCHEMA_VERSION, SCHEMA_SQL
 
         with self._connect() as conn:
             cursor = conn.execute(
@@ -132,31 +134,8 @@ class LocalRegistry:
             schema_table_exists = cursor.fetchone() is not None
 
             if schema_table_exists:
-                cursor = conn.execute("SELECT version FROM schema_version WHERE id = 1")
-                row = cursor.fetchone()
-
-                if row:
-                    db_version = row[0]
-
-                    if db_version > SCHEMA_VERSION:
-                        raise InternalError(
-                            f"Database schema v{db_version} is newer than MLBuild "
-                            f"v{SCHEMA_VERSION}. Upgrade MLBuild."
-                        )
-
-                    # Run all pending migrations in order
-                    while db_version < SCHEMA_VERSION:
-                        sql = get_migration(db_version, db_version + 1)
-                        if not sql:
-                            raise InternalError(
-                                f"No migration path from v{db_version} to "
-                                f"v{db_version + 1}. Cannot upgrade automatically."
-                            )
-                        logger.info(f"Migrating schema v{db_version} → v{db_version + 1}...")
-                        conn.executescript(sql)
-                        db_version += 1
-                        logger.info(f"Migration to v{db_version} complete.")
-                    return
+                self._migrate()
+                return
 
             # Fresh install — create full schema
             try:
@@ -201,6 +180,59 @@ class LocalRegistry:
                     
             except sqlite3.OperationalError as e:
                 return False, f"Schema verification failed: {e}"
+            
+    def _migrate(self) -> None:
+        """
+        Run any pending schema migrations. Called automatically on every
+        registry open. No-op if schema is already current.
+        """
+        from .schema import SCHEMA_VERSION, get_migration
+
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+            )
+            if cursor.fetchone() is None:
+                return
+
+            cursor = conn.execute("SELECT version FROM schema_version WHERE id = 1")
+            row = cursor.fetchone()
+            if not row:
+                return
+
+            db_version = row[0]
+
+            if db_version > SCHEMA_VERSION:
+                raise InternalError(
+                    f"Database schema v{db_version} is newer than MLBuild "
+                    f"v{SCHEMA_VERSION}. Upgrade MLBuild."
+                )
+
+            while db_version < SCHEMA_VERSION:
+                sql = get_migration(db_version, db_version + 1)
+                if not sql:
+                    raise InternalError(
+                        f"No migration path from v{db_version} to "
+                        f"v{db_version + 1}. Cannot upgrade automatically."
+                    )
+                logger.info(
+                    "Auto-migrating schema v%d → v%d...", db_version, db_version + 1
+                )
+                # Run each statement individually so a duplicate column
+                # on a partially-applied migration doesn't abort the rest.
+                for statement in sql.split(";"):
+                    statement = statement.strip()
+                    if not statement:
+                        continue
+                    try:
+                        conn.execute(statement)
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" in str(exc).lower():
+                            logger.debug("Skipping already-applied: %s", statement[:60])
+                        else:
+                            raise
+                db_version += 1
+                logger.info("Migration to v%d complete.", db_version)
 
     # ------------------------------------------------------------
     # Connection Management
@@ -855,8 +887,14 @@ class LocalRegistry:
                     num_samples,
                     seed,
                     passed,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at,
+                    rmse,
+                    kl_divergence,
+                    js_divergence,
+                    error_p50,
+                    error_p95,
+                    error_p99
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["baseline_build_id"],
@@ -869,10 +907,16 @@ class LocalRegistry:
                     row["seed"],
                     row["passed"],
                     row["created_at"],
+                    row["rmse"],
+                    row["kl_divergence"],
+                    row["js_divergence"],
+                    row["error_p50"],
+                    row["error_p95"],
+                    row["error_p99"],
                 ),
             )
             return cursor.lastrowid
-
+        
     def get_accuracy_checks(
         self,
         baseline_build_id: str,
