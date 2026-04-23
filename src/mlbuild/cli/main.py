@@ -639,6 +639,15 @@ cli.add_command(unpin)
 from .commands.search import search
 cli.add_command(search)
 
+from .commands.login import login as login_command
+cli.add_command(login_command, name="login")
+
+from .commands.config_cmd import config_cmd
+cli.add_command(config_cmd, name="config")
+
+from .commands.projects import projects as projects_group
+cli.add_command(projects_group, name="projects")
+
 def _register_prune():
     from .commands.prune import prune
     cli.add_command(prune)

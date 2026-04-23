@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from .cloud_push import push_benchmark
+
 import click
 from rich.console import Console
 
@@ -117,6 +119,13 @@ def _die(output_json: bool, status: str, message: str, code: int) -> None:
     help="Exit 1 if baseline tag not found (default: warn and exit 0).",
 )
 @click.option(
+    "--push",
+    "push_to_cloud",
+    is_flag=True,
+    default=False,
+    help="Push benchmark result to Hylos Cloud as the new baseline.",
+)
+@click.option(
     "--json",
     "output_json",
     is_flag=True,
@@ -136,6 +145,7 @@ def ci(
     cosine_threshold: Optional[float],
     top1_threshold: Optional[float],
     fail_on_missing_baseline: bool,
+    push_to_cloud: bool,    
     output_json: bool,
 ):
     """Run full CI performance check against a registered baseline."""
@@ -240,5 +250,14 @@ def ci(
         print(report.to_json())
     else:
         console.print(report.to_text())
+
+    # ── push to Hylos Cloud ──────────────────────────────────────────────────
+    if push_to_cloud and report.result != "fail":
+        push_benchmark(
+            report=report,
+            model_path=model,
+            build_id=build_id,
+            baseline=baseline,
+        )
 
     sys.exit(_EXIT_FAIL if report.result == "fail" else 0)

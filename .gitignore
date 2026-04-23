@@ -11,3 +11,4 @@ __pycache__/
 tests/fixtures/
 idb_companion.zip
 src/mlbuild/platforms/ios/binaries/
+.env

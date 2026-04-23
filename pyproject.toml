@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 authors = [
     {name = "Abdoulaye Seydi", email = "abdoulayeaseydi@gmail.com"}
 ]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -39,6 +40,9 @@ dependencies = [
     "PyYAML>=6.0",
     "packaging>=23.0",
 
+    # Cloud
+    "httpx>=0.27.0",
+    "keyring>=24.0.0",
 ]
 
 [project.optional-dependencies]
@@ -109,6 +113,7 @@ linux = [
 
 [project.scripts]
 mlbuild = "mlbuild.cli.main:cli"
+hylos = "mlbuild.cli.main:cli"
 
 [project.urls]
 Homepage = "https://github.com/AbdoulayeSeydi/mlbuild"
