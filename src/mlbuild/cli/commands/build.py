@@ -83,9 +83,27 @@ from ...core.task_inputs import build_input_schemas_with_roles
 # ── Output validation config ──────────────────────────────────────────────────
 from ...core.task_validation import StrictOutputConfig
 
+
 logger   = logging.getLogger(__name__)
 console  = Console(width=None)
 
+def _cloud_sync_build(build_obj, build_id: str, size_mb: float, source_hash: str, source_command: str = "build"):
+    try:
+        from ...cloud.sync import push_build
+        push_build(
+            local_build_id=build_id,
+            name=getattr(build_obj, 'name', None),
+            format=getattr(build_obj, 'format', None),
+            target_device=getattr(build_obj, 'target_device', None),
+            quantization=getattr(build_obj, 'quantization_type', None),
+            size_mb=round(size_mb, 2),
+            task_type=getattr(build_obj, 'task_type', None),
+            source_hash=source_hash,
+            pinned=False,
+            source_command=source_command,
+        )
+    except Exception:
+        pass
 
 # ============================================================
 # Detection result container
@@ -685,8 +703,29 @@ def build(
             registry = LocalRegistry()
             try:
                 registry.save_build(build_obj)
+                _cloud_sync_build(build_obj, build_id, size_mb, source_hash)
             except Exception:
                 pass  # Duplicate build — artifact still valid
+
+            # ── Cloud sync ────────────────────────────────────────
+            try:
+                from ...cloud.sync import push_build
+                push_build(
+                    local_build_id=build_id,
+                    name=getattr(build_obj, 'name', None),
+                    format=getattr(build_obj, 'format', None),
+                    target_device=getattr(build_obj, 'target_device', None),
+                    quantization=getattr(build_obj, 'quantization_type', None),
+                    size_mb=round(size_mb, 2),
+                    task_type=getattr(detection.profile, 'task_type', None),
+                    subtype=getattr(detection.profile, 'subtype', None),
+                    source_hash=source_hash,
+                    notes=None,
+                    pinned=False,
+                    source_command="build",
+                )
+            except Exception:
+                pass
 
             _print_success(
                 build_id, artifact_hash, source_hash, config_hash,
@@ -943,6 +982,7 @@ def build(
             registry = LocalRegistry()
             try:
                 registry.save_build(build_obj)
+                _cloud_sync_build(build_obj, build_id, size_mb, source_hash)
             except Exception:
                 shutil.rmtree(final_dir, ignore_errors=True)
                 raise
@@ -1139,7 +1179,7 @@ def _run_coreml_build(
             notes             = notes,
             created_at        = datetime.now(timezone.utc),
             source_path       = str(model_path.resolve()),
-            target_device     = original_target,
+            target_device     = locals().get("original_target", target),
             format            = "coreml",
             quantization      = config["quantization"],
             optimizer_config  = config["optimizer"],
@@ -1166,6 +1206,7 @@ def _run_coreml_build(
 
         try:
             registry.save_build(build_obj)
+            _cloud_sync_build(build_obj, build_id, size_mb, source_hash)
         except Exception:
             pass
 
@@ -1273,6 +1314,7 @@ def _run_tflite_build(
 
     try:
         registry.save_build(build_obj)
+        _cloud_sync_build(build_obj, build_id, size_mb, source_hash)
     except Exception:
         pass
 

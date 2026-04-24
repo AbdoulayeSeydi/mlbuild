@@ -228,6 +228,26 @@ def diff(build_a: str, build_b: str, as_json: bool, ignore_size: bool, ignore_qu
             else:
                 console.print("\n[yellow]Differences detected[/yellow]")
 
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from mlbuild.cloud.sync import push_comparison
+            push_comparison(
+                comparison_type="diff",
+                baseline_build_id=build_obj_a.build_id,
+                baseline_name=getattr(build_obj_a, 'name', None),
+                candidate_build_id=build_obj_b.build_id,
+                candidate_name=getattr(build_obj_b, 'name', None),
+                latency_delta_pct=None,
+                size_delta_pct=round(
+                    (build_obj_b.size_bytes - build_obj_a.size_bytes) / build_obj_a.size_bytes * 100, 2
+                ) if getattr(build_obj_a, 'size_bytes', None) and getattr(build_obj_b, 'size_bytes', None) else None,
+                regression_detected=differences,
+                verdict="different" if differences else "equal",
+                metric_used="metadata",
+            )
+        except Exception:
+            pass
+
         sys.exit(1 if differences else 0)
 
     except MLBuildError as e:

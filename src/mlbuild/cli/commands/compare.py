@@ -186,6 +186,29 @@ def _run_nlp_comparison(baseline, candidate, latency_threshold, as_json, ci_mode
             "threshold_pct": latency_threshold,
         }
         console.print(json.dumps(output, indent=2))
+        
+        # ── Cloud sync ─────────────────────────────────────────────────
+        try:
+            from ...cloud.sync import push_comparison
+            push_comparison(
+                comparison_type="latency",
+                baseline_build_id=baseline.build_id,
+                baseline_name=baseline.name,
+                candidate_build_id=candidate.build_id,
+                candidate_name=candidate.name,
+                latency_delta_pct=locals().get("latency_change_pct"),
+                size_delta_pct=locals().get("size_change_pct"),
+                regression_detected=regression_detected,
+                verdict="fail" if regression_detected else "pass",
+                metric_used=metric,
+                threshold_pct=latency_threshold,
+                accuracy_delta=(
+                    accuracy_result.cosine_similarity if accuracy_result else None
+                ),
+            )
+        except Exception:
+            pass
+
         return 1 if regression_detected else 0
 
     table = Table(title="NLP Comparison (per seq-len)", show_header=True, header_style="bold magenta")
@@ -860,6 +883,24 @@ def ci_check(
             accuracy_top1_threshold=top1_threshold,
             accuracy_mae_threshold=accuracy_mae_threshold,
         )
+
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push_ci_check
+            push_ci_check(
+                baseline_build_id=baseline.build_id,
+                candidate_build_id=candidate.build_id,
+                latency_threshold_pct=effective_latency,
+                size_threshold_pct=effective_size,
+                latency_delta_pct=locals().get("latency_change_pct"),
+                size_delta_pct=locals().get("size_change_pct"),
+                accuracy_delta=None,
+                passed=exit_code == 0,
+                exit_code=exit_code,
+            )
+        except Exception:
+            pass
+
         sys.exit(exit_code)
     except MLBuildError as e:
         console.print(f"\n[red]Error:[/red] {e}\n")

@@ -96,6 +96,38 @@ def explore(
             f"Run [dim]mlbuild log --name {result.name}[/dim] to view all.\n"
         )
 
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push
+            variants = []
+            winner = None
+            for backend_result in result.backends:
+                for v in backend_result.variants:
+                    variants.append({
+                        "build_id": v.build_id,
+                        "backend": backend_result.backend,
+                        "method": v.method,
+                        "size_mb": round(v.size_mb, 3),
+                        "latency_p50_ms": v.latency_p50_ms,
+                        "latency_delta_pct": v.latency_delta_pct,
+                        "size_delta_pct": v.size_delta_pct,
+                        "verdict": v.verdict,
+                        "accuracy_passed": v.accuracy_passed,
+                        "accuracy_cosine": v.accuracy_cosine,
+                    })
+                    if v.verdict == "recommended":
+                        winner = v.build_id
+            push("explorations", {
+                "exploration_type": "explore",
+                "base_build_id": str(model),
+                "base_build_name": model.stem,
+                "variants": variants,
+                "winner_build_id": winner,
+                "optimization_pass": "fast" if result.fast_mode else "full",
+            })
+        except Exception:
+            pass
+
     except click.ClickException:
         raise
     except Exception as exc:

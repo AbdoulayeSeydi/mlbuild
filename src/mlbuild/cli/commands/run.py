@@ -152,6 +152,19 @@ def start_run(manager: ExperimentManager, experiment: str, name: str):
         if name:
             console.print(f"  Name: {name}")
 
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push
+            push("experiment_runs", {
+                "local_run_id": str(run_obj.run_id),
+                "metrics": {},
+                "params": {},
+                "attached_build_ids": [],
+                "status": "running",
+            })
+        except Exception:
+            pass
+
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled.[/yellow]")
         sys.exit(130)
@@ -252,6 +265,20 @@ def end_run(manager: ExperimentManager, run_id: str, status: str):
         clear_active_run()
 
         console.print(f"[green]✓[/green] Ended run ({status})")
+
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push
+            run_obj = manager.get_run(target_run_id)
+            push("experiment_runs", {
+                "local_run_id": target_run_id,
+                "metrics": getattr(run_obj, 'metrics', {}),
+                "params": getattr(run_obj, 'params', {}),
+                "attached_build_ids": getattr(run_obj, 'build_ids', []),
+                "status": status,
+            })
+        except Exception:
+            pass
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Operation cancelled.[/yellow]")

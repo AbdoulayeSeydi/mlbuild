@@ -859,6 +859,28 @@ def report(build_id: str, output: str, open_browser: bool, fmt: str):
 
         console.print()
 
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push
+            push("command_activity", {
+                "command": "report",
+                "args": {
+                    "build_id": build.build_id,
+                    "build_name": build.name,
+                    "format": fmt,
+                    "output_path": str(out_path.resolve()),
+                    "benchmark_count": len(benchmarks),
+                    "sibling_count": len(siblings),
+                },
+                "exit_code": 0,
+                "machine_id": None,
+                "machine_name": None,
+            })
+        except Exception:
+            pass
+
+        console.print()
+
     except MLBuildError as e:
         console.print(f"\n[red]Error:[/red] {e}\n")
         sys.exit(2)

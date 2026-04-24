@@ -395,6 +395,26 @@ def _run_import(
         else:
             raise
 
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_build
+        push_build(
+            local_build_id=bid,
+            name=build_obj.name,
+            format=fmt,
+            target_device=target,
+            quantization=quantize,
+            size_mb=round(size_mb, 2),
+            task_type=task_result.primary.value,
+            subtype=getattr(task_result, 'subtype', None),
+            source_hash=source_hash,
+            notes=getattr(build_obj, 'notes', None),
+            pinned=False,
+            source_command="import",
+        )
+    except Exception:
+        pass
+
     # Step 11: Output
     result = {
         "build_id": bid,

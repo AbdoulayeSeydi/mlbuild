@@ -76,6 +76,31 @@ def optimize_cmd(
 
     console.print(f"[green]✓[/green] {len(variants)} variant(s) registered.\n")
 
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push
+        variant_data = []
+        for v in variants:
+            variant_data.append({
+                "build_id": v.build_id,
+                "method": v.optimization_method,
+                "size_mb": float(v.size_mb) if hasattr(v, 'size_mb') else None,
+                "latency_p50_ms": getattr(v, 'latency_p50_ms', None),
+                "latency_delta_pct": getattr(v, 'latency_delta_pct', None),
+                "size_delta_pct": getattr(v, 'size_delta_pct', None),
+                "variant_id": getattr(v, 'variant_id', None),
+            })
+        push("explorations", {
+            "exploration_type": "optimize",
+            "base_build_id": source.build_id,
+            "base_build_name": source.name,
+            "variants": variant_data,
+            "winner_build_id": variants[0].build_id if variants else None,
+            "optimization_pass": opt_pass,
+        })
+    except Exception:
+        pass
+
     return variants
 
 

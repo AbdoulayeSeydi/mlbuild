@@ -326,6 +326,28 @@ def validate(
     # Report results
     if violations:
         _report_violations(violations, ci)
+
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push_accuracy
+            push_accuracy(
+                check_type="validate",
+                baseline_build_id=None,
+                candidate_build_id=build.build_id,
+                cosine_similarity=getattr(accuracy_result, 'cosine_similarity', None) if accuracy_result else None,
+                top1_agreement=getattr(accuracy_result, 'top1_agreement', None) if accuracy_result else None,
+                kl_divergence=None,
+                js_divergence=None,
+                rmse=None,
+                mae=None,
+                max_error=None,
+                samples=None,
+                seed=None,
+                passed=False,
+            )
+        except Exception:
+            pass
+
         sys.exit(1)
     else:
         if not ci and accuracy_result and not accuracy_result.skipped:
@@ -336,6 +358,28 @@ def validate(
             print("STATUS: PASS")
         else:
             console.print("[bold green]✓ All constraints passed[/bold green]\n")
+
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push_accuracy
+            push_accuracy(
+                check_type="validate",
+                baseline_build_id=None,
+                candidate_build_id=build.build_id,
+                cosine_similarity=getattr(accuracy_result, 'cosine_similarity', None) if accuracy_result else None,
+                top1_agreement=getattr(accuracy_result, 'top1_agreement', None) if accuracy_result else None,
+                kl_divergence=None,
+                js_divergence=None,
+                rmse=None,
+                mae=None,
+                max_error=None,
+                samples=None,
+                seed=None,
+                passed=True,
+            )
+        except Exception:
+            pass
+
         sys.exit(0)
 
 

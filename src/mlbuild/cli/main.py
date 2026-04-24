@@ -141,6 +141,20 @@ def cli(ctx, strict_output):
             registry = LocalRegistry()
             registry.save_command(row)
 
+            # ── Cloud sync (silent, never blocks) ──────────────────
+            from ..cloud.sync import push_activity
+            push_activity(
+                command=command_name,
+                subcommand=None,
+                args=args_dict,
+                duration_ms=duration_ms,
+                exit_code=ctx.obj.get("_exit_code", 0),
+                error_message=ctx.obj.get("_error_message"),
+                machine_id=machine["machine_id"],
+                machine_name=machine["machine_name"],
+                linked_build_id=ctx.obj.get("_linked_build_id"),
+            )
+
         except Exception:
             pass
 

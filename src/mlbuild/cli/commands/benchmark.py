@@ -297,6 +297,29 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
         
         registry.save_benchmark(bench)
 
+        # ── Cloud sync ─────────────────────────────────────────────
+        try:
+            from ...cloud.sync import push_benchmark
+            push_benchmark(
+                local_build_id=build.build_id,
+                build_name=build.name,
+                platform=runtime,
+                runtime=runtime,
+                device_model=result.chip,
+                os_version=None,
+                compute_unit=result.compute_unit,
+                runs=result.num_runs,
+                warmup=warmup,
+                latency_p50_ms=result.latency_p50,
+                latency_p95_ms=result.latency_p95,
+                latency_p99_ms=result.latency_p99,
+                memory_peak_mb=result.memory_peak_mb,
+                thermal_state=str(round(result.thermal_drift_ratio, 3)) if result.thermal_drift_ratio else None,
+                stability_score=getattr(result, 'stability_score', None),
+            )
+        except Exception:
+            pass
+
         # --- PATCH: output validation (non-NLP path) ---
         # Runners don't expose raw output tensors yet — validation is a
         # no-op here until runners return outputs in Step 8 (profile.py).
@@ -811,6 +834,27 @@ def _run_android_device_benchmark(
     )
     registry.save_benchmark(bench)
 
+    # ── Cloud sync ─────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_benchmark
+        push_benchmark(
+            local_build_id=build.build_id,
+            build_name=build.name,
+            platform="android",
+            runtime="tflite",
+            device_model=connected_name,
+            os_version=f"API {api_level}" if api_level else None,
+            compute_unit="CPU",
+            runs=runs,
+            warmup=warmup,
+            latency_p50_ms=view.cpu_p50_ms,
+            latency_p95_ms=view.cpu_p90_ms,
+            latency_p99_ms=view.cpu_p99_ms,
+            memory_peak_mb=view.cpu_peak_mem_mb,
+        )
+    except Exception:
+        pass
+
     try:
         import click as _click
         ctx = _click.get_current_context()
@@ -980,6 +1024,27 @@ def _run_ios_device_benchmark(
         measured_at      = datetime.now(timezone.utc),
     )
     registry.save_benchmark(bench)
+
+    # ── Cloud sync ─────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_benchmark
+        push_benchmark(
+            local_build_id=build.build_id,
+            build_name=build.name,
+            platform="ios",
+            runtime="coreml",
+            device_model=profile.name,
+            os_version=profile.ios_version,
+            compute_unit=view.compute_units_used or "cpuOnly",
+            runs=runs,
+            warmup=warmup,
+            latency_p50_ms=view.cpu_p50_ms,
+            latency_p95_ms=view.cpu_p90_ms,
+            latency_p99_ms=view.cpu_p99_ms,
+            memory_peak_mb=view.cpu_peak_mem_mb,
+        )
+    except Exception:
+        pass
 
     try:
         import click as _click

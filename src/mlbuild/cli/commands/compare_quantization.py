@@ -778,3 +778,43 @@ def compare_quantization(
         border_style="cyan",
     ))
     console.print()
+
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_comparison
+        variants = []
+        for r in results:
+            b = r["build"]
+            bench = r["benchmark"]
+            size_mb = float(b.size_mb)
+            latency = bench.latency_p50
+            size_delta = (size_mb - baseline_size) / baseline_size * 100
+            latency_delta = (latency - baseline_latency) / baseline_latency * 100
+            acc = accuracy_results.get(b.build_id)
+            variants.append({
+                "build_id": b.build_id,
+                "name": b.name,
+                "quantization": (b.quantization or {}).get("type"),
+                "size_mb": size_mb,
+                "latency_p50": latency,
+                "latency_delta_pct": round(latency_delta, 2),
+                "size_delta_pct": round(size_delta, 2),
+                "cosine_similarity": acc.cosine_similarity if acc else None,
+                "relative_error_pct": acc.relative_error if acc else None,
+                "is_baseline": b.build_id == baseline_build.build_id,
+            })
+        push_comparison(
+            comparison_type="quantization",
+            baseline_build_id=baseline_build.build_id,
+            baseline_name=baseline_build.name,
+            candidate_build_id=None,
+            candidate_name=None,
+            latency_delta_pct=None,
+            size_delta_pct=None,
+            regression_detected=False,
+            verdict="quantization_sweep",
+            metric_used=compute_unit,
+            variants=variants,
+        )
+    except Exception:
+        pass

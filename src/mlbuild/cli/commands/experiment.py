@@ -107,6 +107,16 @@ def create_experiment(ctx: CLIContext, name: str, description: Optional[str] = N
         console.print(f"  Name: {exp['name']}")
         console.print(f"  ID:   {exp['experiment_id']}")
 
+        # ── Cloud sync ────────────────────────────────────────
+        try:
+            from ...cloud.sync import push
+            push("experiments", {
+                "local_experiment_id": exp['experiment_id'],
+                "name": exp['name'],
+            })
+        except Exception:
+            pass
+
     except Exception as e:
         handle_error(e, ctx.verbose)
 

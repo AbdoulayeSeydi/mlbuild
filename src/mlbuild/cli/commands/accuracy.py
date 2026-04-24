@@ -376,6 +376,30 @@ def accuracy_command(
         try:
             row_id = registry.save_accuracy_check(result)
             saved  = True
+
+            # ── Cloud sync ────────────────────────────────────────
+            try:
+                from mlbuild.cloud.sync import push_accuracy
+                push_accuracy(
+                    check_type="accuracy",
+                    baseline_build_id=result.baseline_build_id,
+                    candidate_build_id=result.candidate_build_id,
+                    cosine_similarity=result.cosine_similarity,
+                    top1_agreement=result.top1_agreement,
+                    kl_divergence=result.kl_divergence,
+                    js_divergence=result.js_divergence,
+                    rmse=result.rmse,
+                    mae=result.mean_abs_error,
+                    max_error=result.max_abs_error,
+                    samples=result.num_samples,
+                    seed=result.seed,
+                    passed=result.passed,
+                    cosine_threshold=config.cosine_threshold,
+                    top1_threshold=config.top1_threshold,
+                )
+            except Exception:
+                pass
+
         except Exception as exc:
             console.print(f"[yellow]Warning:[/yellow] Failed to save result: {exc}")
 

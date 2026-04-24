@@ -232,6 +232,24 @@ def convert(
 
         if result.status != ConvertStatus.SUCCESS:
             exit_code = 1
+        else:
+            # ── Cloud sync ────────────────────────────────────────
+            try:
+                from ...cloud.sync import push_build
+                push_build(
+                    local_build_id=getattr(result, 'build_id', None) or "",
+                    name=name or getattr(result, 'name', None),
+                    format=target_format,
+                    target_device=target,
+                    quantization=quantize,
+                    size_mb=getattr(result, 'size_mb', None),
+                    task_type=None,
+                    source_hash=None,
+                    pinned=False,
+                    source_command="convert",
+                )
+            except Exception:
+                pass
 
     except ConversionCancelled:
         console.print("\n[yellow]Conversion cancelled.[/yellow]")

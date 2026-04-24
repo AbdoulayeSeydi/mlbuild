@@ -157,3 +157,33 @@ def compare_compute_units(build_id: str, runs: int, warmup: int):
     console.print(f"\n[bold green]Fastest:[/bold green] {fastest[0]} ({fastest[1].latency_p50:.3f} ms)")
     console.print(f"[bold red]Slowest:[/bold red] {slowest[0]} ({slowest[1].latency_p50:.3f} ms)")
     console.print(f"[bold]Speedup:[/bold] {speedup:.2f}x\n")
+
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_comparison
+        variants = [
+            {
+                "compute_unit": cu_name,
+                "latency_p50": r.latency_p50,
+                "latency_p95": r.latency_p95,
+                "latency_p99": r.latency_p99,
+                "memory_peak_mb": r.memory_peak_mb,
+                "is_fastest": cu_name == fastest[0],
+            }
+            for cu_name, r in results.items()
+        ]
+        push_comparison(
+            comparison_type="compute_units",
+            baseline_build_id=build_id,
+            baseline_name=None,
+            candidate_build_id=None,
+            candidate_name=None,
+            latency_delta_pct=round((slowest[1].latency_p50 - fastest[1].latency_p50) / fastest[1].latency_p50 * 100, 2),
+            size_delta_pct=None,
+            regression_detected=False,
+            verdict=f"fastest:{fastest[0]}",
+            metric_used="p50",
+            variants=variants,
+        )
+    except Exception:
+        pass
