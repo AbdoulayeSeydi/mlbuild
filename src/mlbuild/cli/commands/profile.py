@@ -592,6 +592,24 @@ def _profile_tflite_standard(build, runs: int, warmup: int):
         border_style="cyan",
     ))
 
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_profile
+        push_profile(
+            local_build_id=build.build_id,
+            build_name=build.name,
+            platform='tflite',
+            device_model='local',
+            cold_start_ms=None,
+            warm_p50_ms=metrics.get('p50_ms'),
+            warm_p95_ms=metrics.get('p95_ms'),
+            memory_peak_mb=metrics.get('memory_rss_mb'),
+            bottleneck_layer=None,
+            top_layers=[],
+        )
+    except Exception:
+        pass
+
 
 # ============================================================
 # Shared display helpers (cold start + memory)
@@ -1162,3 +1180,42 @@ def profile(
 
     if analyze_warmup:
         _display_warmup_analysis_coreml(artifact_path)
+
+    # ── Cloud sync ────────────────────────────────────────────
+    try:
+        from ...cloud.sync import push_profile
+        top_layers_data = []
+        if result and 'layers' in result:
+            for layer in result['layers'][:10]:
+                top_layers_data.append({
+                    'name': layer.get('name') or layer.get('layer_name'),
+                    'time_ms': layer.get('time_ms') or layer.get('cumulative_ms'),
+                    'pct': layer.get('pct'),
+                })
+        bottleneck = None
+        if top_layers_data:
+            bottleneck = top_layers_data[0].get('name')
+        # Try multiple key names across profiling modes
+        def _get(d, *keys):
+            for k in keys:
+                v = d.get(k) if isinstance(d, dict) else None
+                if v is not None:
+                    return v
+            return None
+
+        push_profile(
+            local_build_id=build.build_id,
+            build_name=build.name,
+            platform='coreml',
+            device_model=getattr(result, 'chip', None) or 'mac',
+            cold_start_ms=None,
+            warm_p50_ms=_get(result, 'p50_ms', 'latency_p50', 'p50') or
+                (result.get('full_model_timing') or {}).get('p50_ms'),
+            warm_p95_ms=_get(result, 'p95_ms', 'latency_p95', 'p95') or
+                (result.get('full_model_timing') or {}).get('p95_ms'),
+            memory_peak_mb=None,
+            bottleneck_layer=bottleneck,
+            top_layers=top_layers_data,
+        )
+    except Exception:
+        pass

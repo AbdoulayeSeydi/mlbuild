@@ -316,6 +316,12 @@ def benchmark(build_id, runs, warmup, compute_unit, as_json, task,
                 memory_peak_mb=result.memory_peak_mb,
                 thermal_state=str(round(result.thermal_drift_ratio, 3)) if result.thermal_drift_ratio else None,
                 stability_score=getattr(result, 'stability_score', None),
+                latency_mean_ms=getattr(result, 'latency_mean', None),
+                latency_std_ms=getattr(result, 'latency_std', None),
+                p50_ci_low=getattr(result, 'p50_ci_low', None),
+                p50_ci_high=getattr(result, 'p50_ci_high', None),
+                autocorrelation_lag1=getattr(result, 'autocorr_lag1', None),
+                failures=getattr(result, 'failures', None),
             )
         except Exception:
             pass
@@ -837,13 +843,21 @@ def _run_android_device_benchmark(
     # ── Cloud sync ─────────────────────────────────────────────
     try:
         from ...cloud.sync import push_benchmark
+        _thermal_drift = None
+        if view.thermal_score and view.thermal_score.latency_drift_pct is not None:
+            _thermal_drift = round(view.thermal_score.latency_drift_pct * 100, 3)
+        _stability_score = None
+        _stability_band = None
+        if view.stability:
+            _stability_score = view.stability.stability_score
+            _stability_band = view.stability.stability_band.value if view.stability.stability_band else None
         push_benchmark(
             local_build_id=build.build_id,
             build_name=build.name,
             platform="android",
             runtime="tflite",
             device_model=connected_name,
-            os_version=f"API {api_level}" if api_level else None,
+            os_version=f"API {device.profile.api_level}" if hasattr(device, 'profile') else None,
             compute_unit="CPU",
             runs=runs,
             warmup=warmup,
@@ -851,6 +865,13 @@ def _run_android_device_benchmark(
             latency_p95_ms=view.cpu_p90_ms,
             latency_p99_ms=view.cpu_p99_ms,
             memory_peak_mb=view.cpu_peak_mem_mb,
+            latency_mean_ms=view.cpu_avg_ms,
+            latency_std_ms=view.cpu_std_ms,
+            thermal_state=f"{view.thermal_pre.battery_temp_c}C→{view.thermal_post.battery_temp_c}C" if view.thermal_pre and view.thermal_post and view.thermal_pre.battery_temp_c else None,
+            latency_drift_pct=_thermal_drift,
+            stability_score=_stability_score,
+            stability_band=_stability_band,
+            failures=getattr(view, 'failures', None),
         )
     except Exception:
         pass
@@ -1028,6 +1049,39 @@ def _run_ios_device_benchmark(
     # ── Cloud sync ─────────────────────────────────────────────
     try:
         from ...cloud.sync import push_benchmark
+        _ios_thermal = None
+        if not profile.is_simulator and view.thermal_state_pre and view.thermal_state_post:
+            _ios_thermal = f"{view.thermal_state_pre.value}→{view.thermal_state_post.value}"
+        _ios_drift = None
+        if view.thermal_score and view.thermal_score.latency_drift_pct is not None:
+            _ios_drift = round(view.thermal_score.latency_drift_pct * 100, 3)
+        _ios_stability_score = None
+        _ios_stability_band = None
+        if view.stability:
+            _ios_stability_score = view.stability.stability_score
+            _ios_stability_band = view.stability.stability_band.value if view.stability.stability_band else None
+        import numpy as _np_sync
+        import json as _json_sync
+        _ios_lat = []
+        for _line in (view.cpu_raw_stdout or "").splitlines():
+            _line = _line.strip()
+            if _line.startswith("{"):
+                try:
+                    _obj = _json_sync.loads(_line)
+                    if _obj.get("event") == "run" and "latency_ms" in _obj:
+                        _ios_lat.append(float(_obj["latency_ms"]))
+                except Exception:
+                    pass
+        _ios_autocorr = None
+        _ios_ci_low = None
+        _ios_ci_high = None
+        if len(_ios_lat) > 1:
+            _arr = _np_sync.array(_ios_lat)
+            _ios_autocorr = float(_np_sync.corrcoef(_arr[:-1], _arr[1:])[0, 1])
+        if len(_ios_lat) >= 20:
+            _rng = _np_sync.random.default_rng(42)
+            _meds = [_np_sync.median(_rng.choice(_ios_lat, len(_ios_lat))) for _ in range(1000)]
+            _ios_ci_low, _ios_ci_high = float(_np_sync.percentile(_meds, 2.5)), float(_np_sync.percentile(_meds, 97.5))
         push_benchmark(
             local_build_id=build.build_id,
             build_name=build.name,
@@ -1042,6 +1096,15 @@ def _run_ios_device_benchmark(
             latency_p95_ms=view.cpu_p90_ms,
             latency_p99_ms=view.cpu_p99_ms,
             memory_peak_mb=view.cpu_peak_mem_mb,
+            latency_mean_ms=view.cpu_avg_ms,
+            latency_std_ms=view.cpu_std_ms,
+            thermal_state=_ios_thermal,
+            latency_drift_pct=_ios_drift,
+            stability_score=_ios_stability_score,
+            stability_band=_ios_stability_band,
+            autocorrelation_lag1=_ios_autocorr,
+            p50_ci_low=_ios_ci_low,
+            p50_ci_high=_ios_ci_high,
         )
     except Exception:
         pass

@@ -176,7 +176,15 @@ def push_benchmark(
     memory_peak_mb: float | None,
     thermal_state: str | None = None,
     stability_score: float | None = None,
+    stability_band: str | None = None,
     passed_budget: bool | None = None,
+    latency_mean_ms: float | None = None,
+    latency_std_ms: float | None = None,
+    p50_ci_low: float | None = None,
+    p50_ci_high: float | None = None,
+    autocorrelation_lag1: float | None = None,
+    latency_drift_pct: float | None = None,
+    failures: int | None = None,
 ) -> bool:
     return push("benchmark_runs", {
         "local_build_id": local_build_id,
@@ -194,7 +202,15 @@ def push_benchmark(
         "memory_peak_mb": memory_peak_mb,
         "thermal_state": thermal_state,
         "stability_score": stability_score,
+        "stability_band": stability_band,
         "passed_budget": passed_budget,
+        "latency_mean_ms": latency_mean_ms,
+        "latency_std_ms": latency_std_ms,
+        "p50_ci_low": p50_ci_low,
+        "p50_ci_high": p50_ci_high,
+        "autocorrelation_lag1": autocorrelation_lag1,
+        "latency_drift_pct": latency_drift_pct,
+        "failures": failures,
     })
 
 

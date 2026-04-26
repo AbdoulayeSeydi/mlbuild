@@ -117,6 +117,30 @@ def collect_status_data(registry) -> Dict[str, Any]:
 
     workspace_ok = ws_path.exists() and registry_db.exists()
 
+    # Cloud connectivity
+    cloud_status = "not logged in"
+    cloud_email = None
+    cloud_project = None
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        config_path = _Path.home() / ".hylos" / "config.json"
+        if config_path.exists():
+            cfg = _json.loads(config_path.read_text())
+            cloud_email = cfg.get("email")
+            cloud_project = cfg.get("project_id")
+            # Check token expiry
+            from ...cloud.sync import _get_token
+            token = _get_token()
+            if token:
+                cloud_status = "connected"
+            else:
+                cloud_status = "token expired"
+        else:
+            cloud_status = "not logged in"
+    except Exception:
+        cloud_status = "unknown"
+
     return {
         "machine": machine_name,
         "workspace_ok": workspace_ok,
@@ -127,6 +151,9 @@ def collect_status_data(registry) -> Dict[str, Any]:
         "last_validate": last_validate,
         "baseline": baseline,
         "budget": budget_clean,
+        "cloud_status": cloud_status,
+        "cloud_email": cloud_email,
+        "cloud_project": cloud_project,
     }
 
 
@@ -147,6 +174,26 @@ def render_status_text(data: Dict[str, Any]):
         console.print("  [green]✓[/green] Workspace    .mlbuild/")
     else:
         console.print("  [red]✗[/red] Workspace    not initialized — run: mlbuild init")
+
+    # Cloud
+    cs = data.get("cloud_status", "unknown")
+    if cs == "connected":
+        console.print(
+            f"  [green]✓[/green] Cloud        connected  "
+            f"[dim]{data.get('cloud_email', '')}[/dim]"
+        )
+        if data.get("cloud_project"):
+            console.print(f"  [dim]Project ID:  {data['cloud_project'][:16]}...[/dim]")
+    elif cs == "token expired":
+        console.print(
+            "  [yellow]⚠[/yellow] Cloud        token expired  "
+            "[dim](run: hylos login)[/dim]"
+        )
+    else:
+        console.print(
+            "  [yellow]—[/yellow] Cloud        not logged in  "
+            "[dim](run: hylos login)[/dim]"
+        )
 
     # Registry
     console.print(
