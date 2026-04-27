@@ -1185,15 +1185,40 @@ def profile(
     try:
         from ...cloud.sync import push_profile
         top_layers_data = []
-        if result and 'layers' in result:
-            for layer in result['layers'][:10]:
+        # Only use layers if they have actual timing data
+        layers_with_timing = [
+            l for l in (result.get('layers') or [])
+            if l.get('time_ms') or l.get('cumulative_ms')
+        ] if result else []
+
+        if layers_with_timing:
+            for layer in layers_with_timing[:10]:
                 top_layers_data.append({
                     'name': layer.get('name') or layer.get('layer_name'),
-                    'time_ms': layer.get('time_ms') or layer.get('cumulative_ms'),
-                    'pct': layer.get('pct'),
+                    'time_ms': layer.get('time_ms') or layer.get('cumulative_ms') or None,
+                    'pct': layer.get('pct') or None,
                 })
+        # For mlProgram -- use operation breakdown as layer list
+        elif result and 'operation_breakdown' in result:
+            bd = result.get('operation_breakdown', {})
+            op_counts = bd.get('operation_counts', {})
+            total = bd.get('total_operations', 1)
+            for op, cnt in sorted(op_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+                top_layers_data.append({
+                    'name': op,
+                    'time_ms': None,
+                    'pct': round(cnt / total * 100, 1) if total else None,
+                })
+        # Skip weight/constant ops for bottleneck -- they don't represent compute
+        _skip_ops = {'const', 'constexpr_affine_dequantize', 'constexpr_blockwise_shift_scale',
+                     'constexpr_lut_to_dense', 'constexpr_sparse_to_dense'}
         bottleneck = None
-        if top_layers_data:
+        for _layer in top_layers_data:
+            _name = _layer.get('name', '')
+            if _name and _name.lower() not in _skip_ops:
+                bottleneck = _name
+                break
+        if not bottleneck and top_layers_data:
             bottleneck = top_layers_data[0].get('name')
         # Try multiple key names across profiling modes
         def _get(d, *keys):
